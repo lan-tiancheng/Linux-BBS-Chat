@@ -1,0 +1,15 @@
+*.o
+*.out
+*.exe
+server
+client
+build/
+bin/
+logs/*
+uploads/*
+data/*
+!logs/.gitkeep
+!uploads/.gitkeep
+!data/.gitkeep
+.vscode/
+.DS_Store
