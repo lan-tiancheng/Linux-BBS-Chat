@@ -179,7 +179,7 @@ def main():
         send_line(second, "LOGOUT")
         assert receive_line(second) == "OK logged out"
         send_line(first, "PRIVATE bob are-you-there")
-        assert receive_line(first) == "ERR user is not online"
+        assert receive_line(first) == "OK private message stored for offline user"
 
         send_line(second, "ECHO second-client")
         assert receive_line(second) == "ECHO second-client"
@@ -193,6 +193,7 @@ def main():
             log_contents = log_file.read()
         assert "[GROUP] alice: hello-from-first" in log_contents, log_contents
         assert "[PRIVATE] alice -> bob: private-hello" in log_contents, log_contents
+        assert "[PRIVATE] alice -> bob: are-you-there" in log_contents, log_contents
         send_line(first, "QUIT")
         assert receive_line(first) == "OK bye"
         send_line(second, "QUIT")

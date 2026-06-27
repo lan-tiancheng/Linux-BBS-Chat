@@ -9,3 +9,7 @@ backup/*
 *.o
 *.out
 *.exe
+frontend/qt_client/moc_*.cpp
+frontend/qt_client/qrc_*.cpp
+frontend/qt_client/bbs_chat_qt
+frontend/qt_client/downloads/*

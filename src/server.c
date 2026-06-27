@@ -275,6 +275,261 @@ static int private_message(const ClientSlot *sender, const char *recipient,
     return delivery;
 }
 
+static void copy_protocol_field(char *destination, size_t capacity,
+                                const char *source)
+{
+    size_t i;
+
+    if (capacity == 0) {
+        return;
+    }
+    for (i = 0; i + 1 < capacity && source != NULL && source[i] != '\0'; i++) {
+        char ch = source[i];
+        destination[i] = (ch == '|' || ch == '\r' || ch == '\n') ? ' ' : ch;
+    }
+    destination[i] = '\0';
+}
+
+typedef struct {
+    const char *owner;
+    BbsFileRecord record;
+    int found;
+} BbsAttachmentLookup;
+
+static int remember_attachment_for_owner(const BbsFileRecord *record,
+                                         void *context)
+{
+    BbsAttachmentLookup *lookup = context;
+
+    if (record->active && strcmp(record->owner, lookup->owner) == 0) {
+        lookup->record = *record;
+        lookup->found = 1;
+    }
+    return 0;
+}
+
+static int find_bbs_attachment(const char *owner, BbsFileRecord *record)
+{
+    BbsAttachmentLookup lookup;
+
+    memset(&lookup, 0, sizeof(lookup));
+    lookup.owner = owner;
+    if (bbs_visit_files(remember_attachment_for_owner, &lookup) < 0 ||
+        !lookup.found) {
+        return -1;
+    }
+    if (record != NULL) {
+        *record = lookup.record;
+    }
+    return 0;
+}
+
+static void post_attachment_owner(unsigned long post_id, char *owner,
+                                  size_t capacity)
+{
+    snprintf(owner, capacity, "post:%lu", post_id);
+}
+
+static void reply_attachment_owner(unsigned long reply_id, char *owner,
+                                   size_t capacity)
+{
+    snprintf(owner, capacity, "reply:%lu", reply_id);
+}
+
+static void format_attachment_name(const char *owner, char *name,
+                                   size_t capacity)
+{
+    BbsFileRecord record;
+
+    if (find_bbs_attachment(owner, &record) == 0) {
+        copy_protocol_field(name, capacity, record.filename);
+    } else {
+        snprintf(name, capacity, "none");
+    }
+}
+
+typedef struct {
+    ClientSlot *client;
+    unsigned long count;
+} BbsListContext;
+
+static int send_bbs_post_item(const BbsPostRecord *post, void *context)
+{
+    BbsListContext *list = context;
+    char owner[32];
+    char title[BBS_TITLE_LENGTH + 1];
+    char content[BBS_CONTENT_LENGTH + 1];
+    char attachment[128];
+    char line[MAX_LINE_LENGTH * 3];
+
+    if (!post->active) {
+        return 0;
+    }
+    post_attachment_owner(post->id, owner, sizeof(owner));
+    format_attachment_name(owner, attachment, sizeof(attachment));
+    copy_protocol_field(title, sizeof(title), post->title);
+    copy_protocol_field(content, sizeof(content), post->content);
+    snprintf(line, sizeof(line), "BBS_POST %lu|%s|%s|%s|%s|%s", post->id,
+             post->author, title, content, attachment, post->created_at);
+    list->count++;
+    return slot_send_line(list->client, line) < 0 ? -1 : 0;
+}
+
+static int send_bbs_reply_item(const BbsReplyRecord *reply, void *context)
+{
+    BbsListContext *list = context;
+    char owner[32];
+    char content[BBS_CONTENT_LENGTH + 1];
+    char attachment[128];
+    char line[MAX_LINE_LENGTH * 3];
+
+    if (!reply->active) {
+        return 0;
+    }
+    reply_attachment_owner(reply->id, owner, sizeof(owner));
+    format_attachment_name(owner, attachment, sizeof(attachment));
+    copy_protocol_field(content, sizeof(content), reply->content);
+    snprintf(line, sizeof(line), "BBS_REPLY %lu|%lu|%s|%s|%s|%s",
+             reply->id, reply->post_id, reply->author, content, attachment,
+             reply->created_at);
+    list->count++;
+    return slot_send_line(list->client, line) < 0 ? -1 : 0;
+}
+
+static int append_bbs_attachment_record(const char *owner, const char *sender,
+                                        const char *filename,
+                                        const char *stored_path,
+                                        unsigned long long size)
+{
+    BbsFileRecord record;
+    char timestamp[20];
+
+    memset(&record, 0, sizeof(record));
+    format_timestamp(timestamp, sizeof(timestamp));
+    if (bbs_next_file_id(&record.id) < 0) {
+        return -1;
+    }
+    snprintf(record.owner, sizeof(record.owner), "%s", owner);
+    snprintf(record.sender, sizeof(record.sender), "%s", sender);
+    snprintf(record.recipient, sizeof(record.recipient), "%s", owner);
+    snprintf(record.filename, sizeof(record.filename), "%s", filename);
+    snprintf(record.stored_name, sizeof(record.stored_name), "%s",
+             stored_path);
+    record.size = size;
+    snprintf(record.created_at, sizeof(record.created_at), "%s", timestamp);
+    record.active = 1;
+    return bbs_append_file_record(&record);
+}
+
+static int store_bbs_attachment(ClientSlot *client, const char *owner,
+                                const char *filename,
+                                unsigned long long size,
+                                char *stored_path,
+                                size_t stored_path_capacity)
+{
+    char safe_owner[32];
+    FILE *file;
+    int result;
+    size_t i;
+
+    for (i = 0; i + 1 < sizeof(safe_owner) && owner[i] != '\0'; i++) {
+        safe_owner[i] = owner[i] == ':' ? '_' : owner[i];
+    }
+    safe_owner[i] = '\0';
+    if (snprintf(stored_path, stored_path_capacity, "%s/%s__%s",
+                 storage_upload_dir(), safe_owner, filename) >=
+        (int)stored_path_capacity) {
+        (void)file_discard_contents(client->sockfd, size);
+        return -1;
+    }
+    file = fopen(stored_path, "wbx");
+    if (file == NULL) {
+        (void)file_discard_contents(client->sockfd, size);
+        return -1;
+    }
+    result = file_receive_contents(client->sockfd, file, size);
+    if (fclose(file) != 0) {
+        result = -1;
+    }
+    if (result < 0) {
+        unlink(stored_path);
+    }
+    return result;
+}
+
+static int send_bbs_attachment(ClientSlot *client, const char *owner)
+{
+    BbsFileRecord record;
+    char header[MAX_LINE_LENGTH];
+    FILE *file;
+    int result;
+
+    if (find_bbs_attachment(owner, &record) < 0) {
+        return slot_send_line(client, "ERR attachment not found") < 0;
+    }
+    file = fopen(record.stored_name, "rb");
+    if (file == NULL) {
+        return slot_send_line(client, "ERR attachment not found") < 0;
+    }
+    snprintf(header, sizeof(header), "BBS_FILE %s %llu", record.filename,
+             record.size);
+    pthread_mutex_lock(&client->send_mutex);
+    result = send_line(client->sockfd, header);
+    if (result == 0) {
+        result = file_send_contents(client->sockfd, file, record.size);
+    }
+    pthread_mutex_unlock(&client->send_mutex);
+    fclose(file);
+    return result < 0;
+}
+
+static int send_history(ClientSlot *client)
+{
+    FILE *file;
+    char line[MAX_LINE_LENGTH * 2];
+
+    if (slot_send_line(client, "HISTORY_BEGIN") < 0) {
+        return 1;
+    }
+    file = fopen(storage_chat_log_file(), "r");
+    if (file == NULL) {
+        return slot_send_line(client, "HISTORY_END") < 0;
+    }
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char timestamp[32];
+        char type[16];
+        char sender[MAX_USERNAME_LENGTH + 1];
+        char recipient[MAX_USERNAME_LENGTH + 1];
+        char message[MAX_LINE_LENGTH];
+        char response[MAX_LINE_LENGTH * 2];
+
+        line[strcspn(line, "\r\n")] = '\0';
+        if (sscanf(line, "[%31[^]]] [%15[^]]] %31s -> %31[^:]: %1087[^\n]",
+                   timestamp, type, sender, recipient, message) == 5 &&
+            strcmp(type, "PRIVATE") == 0) {
+            snprintf(response, sizeof(response), "HPMSG %s|%s|%s|%s",
+                     timestamp, sender, recipient, message);
+            if (slot_send_line(client, response) < 0) {
+                fclose(file);
+                return 1;
+            }
+            continue;
+        }
+        if (sscanf(line, "[%31[^]]] [%15[^]]] %31[^:]: %1087[^\n]",
+                   timestamp, type, sender, message) == 4 &&
+            strcmp(type, "GROUP") == 0) {
+            snprintf(response, sizeof(response), "HMSG %s|%s|%s", timestamp,
+                     sender, message);
+            if (slot_send_line(client, response) < 0) {
+                fclose(file);
+                return 1;
+            }
+        }
+    }
+    fclose(file);
+    return slot_send_line(client, "HISTORY_END") < 0;
+}
+
 static int append_uploaded_file_record(const char *sender,
                                        const char *recipient,
                                        const char *filename,
@@ -346,10 +601,12 @@ static int handle_command(ClientSlot *client, char *line)
         return slot_send_line(
                    client,
                    "COMMANDS REGISTER <user> <pass> LOGIN <user> <pass> "
-                   "LOGOUT WHO GROUP <text> PRIVATE <user> <text> "
+                   "LOGOUT WHO HISTORY GROUP <text> PRIVATE <user> <text> "
                    "UPLOAD <user> <local-path> DOWNLOAD <filename> "
                    "POST <title> <content> REPLY <post_id> <content> "
-                   "LISTPOST VIEWPOST <post_id> BACKUP [label] "
+                   "LISTPOST VIEWPOST <post_id> "
+                   "BBS_LIST BBS_VIEW <post_id> BBS_CREATE <title>|<content> "
+                   "BBS_REPLY <post_id>|<content> BACKUP [label] "
                    "PING ECHO <text> HELP QUIT") < 0;
     }
     if (strcmp(line, "WHO") == 0) {
@@ -358,6 +615,12 @@ static int handle_command(ClientSlot *client, char *line)
         }
         send_client_list(client);
         return 0;
+    }
+    if (strcmp(line, "HISTORY") == 0) {
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        return send_history(client);
     }
     if (strcmp(line, "LOGOUT") == 0) {
         if (!logout_client(client)) {
@@ -463,9 +726,23 @@ static int handle_command(ClientSlot *client, char *line)
             return slot_send_line(
                        client, "ERR usage: PRIVATE <user> <text>") < 0;
         }
+        if (strcmp(client->username, argument) == 0) {
+            return slot_send_line(
+                       client,
+                       "ERR cannot send private message to yourself") < 0;
+        }
+        if (user_exists(argument) <= 0) {
+            return slot_send_line(client, "ERR user does not exist") < 0;
+        }
         delivery = private_message(client, argument, message);
         if (delivery == 0) {
-            return slot_send_line(client, "ERR user is not online") < 0;
+            if (chat_log_private(client->username, argument, message) < 0) {
+                return slot_send_line(client,
+                                      "ERR private log failed") < 0;
+            }
+            return slot_send_line(
+                       client,
+                       "OK private message stored for offline user") < 0;
         }
         if (delivery == -1) {
             return slot_send_line(client, "ERR private delivery failed") < 0;
@@ -651,6 +928,22 @@ static int handle_command(ClientSlot *client, char *line)
         snprintf(response, sizeof(response), "OK total %lu", context.count);
         return slot_send_line(client, response) < 0;
     }
+    if (strcmp(line, "BBS_LIST") == 0) {
+        BbsListContext context;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (slot_send_line(client, "BBS_POSTS_BEGIN") < 0) {
+            return 1;
+        }
+        context.client = client;
+        context.count = 0;
+        if (bbs_visit_posts(send_bbs_post_item, &context) < 0) {
+            return slot_send_line(client, "ERR list failed") < 0;
+        }
+        return slot_send_line(client, "BBS_POSTS_END") < 0;
+    }
     if (strcmp(line, "VIEWPOST") == 0) {
         unsigned long post_id;
         char *end = NULL;
@@ -684,6 +977,254 @@ static int handle_command(ClientSlot *client, char *line)
         }
         snprintf(response, sizeof(response), "OK replies %lu", context.count);
         return slot_send_line(client, response) < 0;
+    }
+    if (strcmp(line, "BBS_VIEW") == 0) {
+        unsigned long post_id;
+        char *end = NULL;
+        BbsPostRecord post;
+        BbsListContext context;
+        char owner[32];
+        char title[BBS_TITLE_LENGTH + 1];
+        char content[BBS_CONTENT_LENGTH + 1];
+        char attachment[128];
+        char bbs_line[MAX_LINE_LENGTH * 3];
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (argument == NULL || *argument == '\0') {
+            return slot_send_line(client, "ERR usage: BBS_VIEW <post_id>") < 0;
+        }
+        errno = 0;
+        post_id = strtoul(argument, &end, 10);
+        if (errno != 0 || end == NULL || *end != '\0' || post_id == 0) {
+            return slot_send_line(client, "ERR invalid post id") < 0;
+        }
+        if (bbs_read_post(post_id, &post) < 0) {
+            return slot_send_line(client, "BBS_NOT_FOUND") < 0;
+        }
+        post_attachment_owner(post.id, owner, sizeof(owner));
+        format_attachment_name(owner, attachment, sizeof(attachment));
+        copy_protocol_field(title, sizeof(title), post.title);
+        copy_protocol_field(content, sizeof(content), post.content);
+        snprintf(bbs_line, sizeof(bbs_line), "BBS_POST %lu|%s|%s|%s|%s|%s",
+                 post.id, post.author, title, content, attachment,
+                 post.created_at);
+        if (slot_send_line(client, "BBS_POST_BEGIN") < 0 ||
+            slot_send_line(client, bbs_line) < 0 ||
+            slot_send_line(client, "BBS_REPLIES_BEGIN") < 0) {
+            return 1;
+        }
+        context.client = client;
+        context.count = 0;
+        if (bbs_visit_replies(post_id, send_bbs_reply_item, &context) < 0) {
+            return slot_send_line(client, "ERR reply list failed") < 0;
+        }
+        return slot_send_line(client, "BBS_REPLIES_END") < 0 ||
+               slot_send_line(client, "BBS_POST_END") < 0;
+    }
+    if (strcmp(line, "BBS_CREATE") == 0) {
+        char *separator;
+        BbsPostRecord record;
+        char timestamp[20];
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (argument == NULL || (separator = strchr(argument, '|')) == NULL) {
+            return slot_send_line(
+                       client, "ERR usage: BBS_CREATE <title>|<content>") < 0;
+        }
+        *separator++ = '\0';
+        if (*argument == '\0' || *separator == '\0') {
+            return slot_send_line(
+                       client, "ERR usage: BBS_CREATE <title>|<content>") < 0;
+        }
+        memset(&record, 0, sizeof(record));
+        if (bbs_next_post_id(&record.id) < 0) {
+            return slot_send_line(client, "ERR post id failed") < 0;
+        }
+        copy_client_username(client, record.author, sizeof(record.author));
+        copy_protocol_field(record.title, sizeof(record.title), argument);
+        copy_protocol_field(record.content, sizeof(record.content), separator);
+        format_timestamp(timestamp, sizeof(timestamp));
+        snprintf(record.created_at, sizeof(record.created_at), "%s", timestamp);
+        snprintf(record.updated_at, sizeof(record.updated_at), "%s", timestamp);
+        record.active = 1;
+        if (bbs_append_post(&record) < 0) {
+            return slot_send_line(client, "ERR post save failed") < 0;
+        }
+        snprintf(response, sizeof(response), "OK post %lu created", record.id);
+        return slot_send_line(client, response) < 0;
+    }
+    if (strcmp(line, "BBS_REPLY") == 0) {
+        char *separator;
+        unsigned long post_id;
+        char *end = NULL;
+        BbsReplyRecord record;
+        char timestamp[20];
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (argument == NULL || (separator = strchr(argument, '|')) == NULL) {
+            return slot_send_line(
+                       client, "ERR usage: BBS_REPLY <post_id>|<content>") < 0;
+        }
+        *separator++ = '\0';
+        errno = 0;
+        post_id = strtoul(argument, &end, 10);
+        if (errno != 0 || end == NULL || *end != '\0' || post_id == 0) {
+            return slot_send_line(client, "ERR invalid post id") < 0;
+        }
+        if (*separator == '\0') {
+            return slot_send_line(
+                       client, "ERR usage: BBS_REPLY <post_id>|<content>") < 0;
+        }
+        if (bbs_read_post(post_id, &(BbsPostRecord){0}) < 0) {
+            return slot_send_line(client, "ERR post not found") < 0;
+        }
+        memset(&record, 0, sizeof(record));
+        if (bbs_next_reply_id(&record.id) < 0) {
+            return slot_send_line(client, "ERR reply id failed") < 0;
+        }
+        record.post_id = post_id;
+        copy_client_username(client, record.author, sizeof(record.author));
+        copy_protocol_field(record.content, sizeof(record.content), separator);
+        format_timestamp(timestamp, sizeof(timestamp));
+        snprintf(record.created_at, sizeof(record.created_at), "%s", timestamp);
+        record.active = 1;
+        if (bbs_append_reply(&record) < 0) {
+            return slot_send_line(client, "ERR reply save failed") < 0;
+        }
+        snprintf(response, sizeof(response), "OK reply %lu created", record.id);
+        return slot_send_line(client, response) < 0;
+    }
+    if (strcmp(line, "BBS_UPLOAD_POST") == 0 ||
+        strcmp(line, "BBS_UPLOAD_REPLY") == 0) {
+        char id_text[32];
+        char filename[MAX_FILENAME_LENGTH + 1];
+        char size_text[32];
+        char extra;
+        char *end = NULL;
+        unsigned long object_id;
+        unsigned long long size;
+        char username[MAX_USERNAME_LENGTH + 1];
+        char owner[32];
+        char stored_path[256];
+
+        if (argument == NULL ||
+            sscanf(argument, "%31s %127s %31s %c", id_text, filename,
+                   size_text, &extra) != 3) {
+            return slot_send_line(
+                       client,
+                       strcmp(line, "BBS_UPLOAD_POST") == 0
+                           ? "ERR usage: BBS_UPLOAD_POST <post_id> <filename> <size>"
+                           : "ERR usage: BBS_UPLOAD_REPLY <reply_id> <filename> <size>") < 0;
+        }
+        if (file_parse_size(size_text, &size) < 0) {
+            (void)slot_send_line(client, "ERR invalid file size");
+            return 1;
+        }
+        if (!file_name_valid(filename)) {
+            if (file_discard_contents(client->sockfd, size) < 0) {
+                return 1;
+            }
+            return slot_send_line(client, "ERR invalid filename") < 0;
+        }
+        if (!client_is_logged_in(client)) {
+            if (file_discard_contents(client->sockfd, size) < 0) {
+                return 1;
+            }
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        errno = 0;
+        object_id = strtoul(id_text, &end, 10);
+        if (errno != 0 || end == NULL || *end != '\0' || object_id == 0) {
+            if (file_discard_contents(client->sockfd, size) < 0) {
+                return 1;
+            }
+            return slot_send_line(client, "ERR invalid id") < 0;
+        }
+        copy_client_username(client, username, sizeof(username));
+        if (strcmp(line, "BBS_UPLOAD_POST") == 0) {
+            BbsPostRecord post;
+
+            if (bbs_read_post(object_id, &post) < 0) {
+                if (file_discard_contents(client->sockfd, size) < 0) {
+                    return 1;
+                }
+                return slot_send_line(client, "ERR post not found") < 0;
+            }
+            if (strcmp(post.author, username) != 0) {
+                if (file_discard_contents(client->sockfd, size) < 0) {
+                    return 1;
+                }
+                return slot_send_line(
+                           client,
+                           "ERR only post author can upload attachment") < 0;
+            }
+            post_attachment_owner(object_id, owner, sizeof(owner));
+        } else {
+            BbsReplyRecord reply;
+
+            if (bbs_read_reply(object_id, &reply) < 0) {
+                if (file_discard_contents(client->sockfd, size) < 0) {
+                    return 1;
+                }
+                return slot_send_line(client, "ERR reply not found") < 0;
+            }
+            if (strcmp(reply.author, username) != 0) {
+                if (file_discard_contents(client->sockfd, size) < 0) {
+                    return 1;
+                }
+                return slot_send_line(
+                           client,
+                           "ERR only reply author can upload attachment") < 0;
+            }
+            reply_attachment_owner(object_id, owner, sizeof(owner));
+        }
+        if (find_bbs_attachment(owner, NULL) == 0) {
+            if (file_discard_contents(client->sockfd, size) < 0) {
+                return 1;
+            }
+            return slot_send_line(client, "ERR attachment already exists") < 0;
+        }
+        if (store_bbs_attachment(client, owner, filename, size, stored_path,
+                                 sizeof(stored_path)) < 0) {
+            return slot_send_line(client, "ERR upload failed") < 0;
+        }
+        if (append_bbs_attachment_record(owner, username, filename, stored_path,
+                                         size) < 0) {
+            unlink(stored_path);
+            return slot_send_line(client, "ERR upload record failed") < 0;
+        }
+        snprintf(response, sizeof(response), "OK uploaded %s", filename);
+        return slot_send_line(client, response) < 0;
+    }
+    if (strcmp(line, "BBS_DOWNLOAD_POST") == 0 ||
+        strcmp(line, "BBS_DOWNLOAD_REPLY") == 0) {
+        unsigned long object_id;
+        char *end = NULL;
+        char owner[32];
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (argument == NULL || *argument == '\0') {
+            return slot_send_line(client, "ERR usage: BBS_DOWNLOAD <id>") < 0;
+        }
+        errno = 0;
+        object_id = strtoul(argument, &end, 10);
+        if (errno != 0 || end == NULL || *end != '\0' || object_id == 0) {
+            return slot_send_line(client, "ERR invalid id") < 0;
+        }
+        if (strcmp(line, "BBS_DOWNLOAD_POST") == 0) {
+            post_attachment_owner(object_id, owner, sizeof(owner));
+        } else {
+            reply_attachment_owner(object_id, owner, sizeof(owner));
+        }
+        return send_bbs_attachment(client, owner);
     }
     if (strcmp(line, "BACKUP") == 0) {
         char snapshot_path[PATH_MAX];
