@@ -11,6 +11,8 @@ downloads/*
 data/*
 !logs/.gitkeep
 !uploads/.gitkeep
+!downloads/.gitkeep
+!backup/.gitkeep
 !data/.gitkeep
 .vscode/
 .DS_Store

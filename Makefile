@@ -4,8 +4,8 @@ CPPFLAGS := -Iinclude
 LDFLAGS := -pthread
 
 BIN_DIR := bin
-COMMON_SRC := src/protocol.c
-SERVER_SRC := src/server.c src/user.c src/chat.c src/file_transfer.c $(COMMON_SRC)
+COMMON_SRC := src/protocol.c src/storage.c
+SERVER_SRC := src/server.c src/user.c src/chat.c src/file_transfer.c src/bbs.c $(COMMON_SRC)
 CLIENT_SRC := src/client.c src/file_transfer.c src/user.c $(COMMON_SRC)
 SERVER_BIN := $(BIN_DIR)/server
 CLIENT_BIN := $(BIN_DIR)/client
@@ -30,6 +30,7 @@ clean:
 test: all
 	python3 tests/test_multiclient.py
 	python3 tests/test_restart.py
+	python3 tests/test_storage_features.py
 
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin

@@ -1,6 +1,7 @@
 #include "file_transfer.h"
 
 #include "protocol.h"
+#include "storage.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -11,23 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define DEFAULT_UPLOAD_DIR "uploads/chat"
-#define DEFAULT_DOWNLOAD_DIR "downloads"
 #define FILE_CHUNK_SIZE 8192
-
-static const char *upload_directory(void)
-{
-    const char *configured = getenv("BBS_UPLOAD_DIR");
-    return configured != NULL && *configured != '\0' ? configured
-                                                       : DEFAULT_UPLOAD_DIR;
-}
-
-static const char *download_directory(void)
-{
-    const char *configured = getenv("BBS_DOWNLOAD_DIR");
-    return configured != NULL && *configured != '\0' ? configured
-                                                       : DEFAULT_DOWNLOAD_DIR;
-}
 
 static int ensure_directory(const char *path)
 {
@@ -40,18 +25,24 @@ static int ensure_directory(const char *path)
 static int build_server_path(char *path, size_t capacity, const char *recipient,
                              const char *filename)
 {
-    int written = snprintf(path, capacity, "%s/%s__%s", upload_directory(),
+    int written = snprintf(path, capacity, "%s/%s__%s", storage_upload_dir(),
                            recipient, filename);
     return written >= 0 && (size_t)written < capacity ? 0 : -1;
 }
 
+int file_server_path(const char *recipient, const char *filename, char *path,
+                     size_t capacity)
+{
+    return build_server_path(path, capacity, recipient, filename);
+}
+
 int file_transfer_init(void)
 {
-    if (strcmp(upload_directory(), DEFAULT_UPLOAD_DIR) == 0 &&
+    if (strcmp(storage_upload_dir(), "uploads/chat") == 0 &&
         ensure_directory("uploads") < 0) {
         return -1;
     }
-    return ensure_directory(upload_directory());
+    return ensure_directory(storage_upload_dir());
 }
 
 int file_name_valid(const char *filename)
@@ -216,17 +207,17 @@ int file_open_client_download(const char *filename, FILE **file,
 {
     unsigned int suffix = 0;
 
-    if (ensure_directory(download_directory()) < 0) {
+    if (ensure_directory(storage_download_dir()) < 0) {
         return -1;
     }
     for (;;) {
         int written;
         if (suffix == 0) {
             written = snprintf(saved_path, saved_path_capacity, "%s/%s",
-                               download_directory(), filename);
+                               storage_download_dir(), filename);
         } else {
             written = snprintf(saved_path, saved_path_capacity, "%s/%u_%s",
-                               download_directory(), suffix, filename);
+                               storage_download_dir(), suffix, filename);
         }
         if (written < 0 || (size_t)written >= saved_path_capacity) {
             return -1;

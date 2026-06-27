@@ -1,0 +1,11 @@
+.git
+bin
+build
+data/*
+logs/*
+uploads/*
+downloads/*
+backup/*
+*.o
+*.out
+*.exe

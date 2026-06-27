@@ -17,6 +17,8 @@ int file_discard_contents(int sockfd, unsigned long long size);
 
 int file_store_upload(int sockfd, const char *recipient, const char *filename,
                       unsigned long long size);
+int file_server_path(const char *recipient, const char *filename, char *path,
+                     size_t capacity);
 int file_open_download(const char *recipient, const char *filename, FILE **file,
                        unsigned long long *size);
 int file_open_client_download(const char *filename, FILE **file,

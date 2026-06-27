@@ -1,20 +1,12 @@
 #include "chat.h"
+#include "storage.h"
 
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 
-#define DEFAULT_CHAT_LOG "logs/chat.log"
-
 static pthread_mutex_t chat_log_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-static const char *chat_log_path(void)
-{
-    const char *configured = getenv("BBS_CHAT_LOG");
-    return configured != NULL && *configured != '\0' ? configured
-                                                       : DEFAULT_CHAT_LOG;
-}
 
 static int write_log_entry(const char *type, const char *sender,
                            const char *recipient, const char *message)
@@ -33,7 +25,7 @@ static int write_log_entry(const char *type, const char *sender,
     }
 
     pthread_mutex_lock(&chat_log_mutex);
-    file = fopen(chat_log_path(), "a");
+    file = fopen(storage_chat_log_file(), "a");
     if (file == NULL) {
         result = -1;
     } else {
@@ -61,7 +53,7 @@ int chat_log_init(void)
     FILE *file;
 
     pthread_mutex_lock(&chat_log_mutex);
-    file = fopen(chat_log_path(), "a");
+    file = fopen(storage_chat_log_file(), "a");
     if (file != NULL) {
         fclose(file);
     }

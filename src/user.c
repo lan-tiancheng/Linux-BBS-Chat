@@ -1,4 +1,5 @@
 #include "user.h"
+#include "storage.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -7,16 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define DEFAULT_USERS_FILE "data/users.db"
-
 static pthread_mutex_t users_file_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-static const char *users_file_path(void)
-{
-    const char *configured = getenv("BBS_USERS_FILE");
-    return configured != NULL && *configured != '\0' ? configured
-                                                       : DEFAULT_USERS_FILE;
-}
 
 static int parse_user_record(char *line, char **username, char **password)
 {
@@ -81,7 +73,7 @@ int user_store_init(void)
     FILE *file;
 
     pthread_mutex_lock(&users_file_mutex);
-    file = fopen(users_file_path(), "a");
+    file = fopen(storage_users_file(), "a");
     if (file != NULL) {
         fclose(file);
     }
@@ -100,7 +92,7 @@ UserResult user_register(const char *username, const char *password)
     }
 
     pthread_mutex_lock(&users_file_mutex);
-    file = fopen(users_file_path(), "a+");
+    file = fopen(storage_users_file(), "a+");
     if (file == NULL) {
         result = USER_STORAGE_ERROR;
         goto done;
@@ -144,7 +136,7 @@ UserResult user_authenticate(const char *username, const char *password)
     }
 
     pthread_mutex_lock(&users_file_mutex);
-    file = fopen(users_file_path(), "r");
+    file = fopen(storage_users_file(), "r");
     if (file == NULL) {
         result = errno == ENOENT ? USER_NOT_FOUND : USER_STORAGE_ERROR;
         goto done;
@@ -180,7 +172,7 @@ int user_exists(const char *username)
         return 0;
     }
     pthread_mutex_lock(&users_file_mutex);
-    file = fopen(users_file_path(), "r");
+    file = fopen(storage_users_file(), "r");
     if (file == NULL) {
         result = errno == ENOENT ? 0 : -1;
         goto done;
