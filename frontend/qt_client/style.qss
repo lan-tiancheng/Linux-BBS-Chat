@@ -1,0 +1,248 @@
+* {
+    font-family: "Microsoft YaHei", "Noto Sans CJK SC", "WenQuanYi Micro Hei", sans-serif;
+    font-size: 14px;
+}
+
+QWidget {
+    background: #f6f8f4;
+    color: #213527;
+}
+
+#LoginWindow {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 #fbfdf8, stop:0.48 #eef6ee, stop:1 #dceee4);
+}
+
+#LoginTitle {
+    font-size: 34px;
+    font-weight: 900;
+    color: #183c2e;
+    letter-spacing: 1px;
+}
+
+#LoginSubtitle {
+    color: #6e7f72;
+    font-size: 13px;
+}
+
+#StatusLabel {
+    color: #2f5f4d;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.72);
+    border: 1px solid #dce8dd;
+}
+
+#Page {
+    background: #f6f8f4;
+}
+
+#PanelTitle {
+    font-size: 18px;
+    font-weight: 850;
+    color: #183c2e;
+    padding: 2px 0 4px 0;
+}
+
+#HintText {
+    color: #728276;
+    font-size: 12px;
+    padding-bottom: 4px;
+}
+
+#ContentCard, #SideCard, #ComposeCard {
+    background: #ffffff;
+    border: 1px solid #dfe9df;
+    border-radius: 22px;
+}
+
+#ContentCard, #SideCard {
+    padding: 4px;
+}
+
+#ComposeCard {
+    background: #fbfdf9;
+    padding: 6px;
+}
+
+QLineEdit, QTextEdit, QTextBrowser, QListWidget {
+    background: #ffffff;
+    border: 1px solid #d9e5da;
+    border-radius: 16px;
+    padding: 9px 11px;
+    selection-background-color: #bfe5d6;
+    selection-color: #183c2e;
+}
+
+QLineEdit:focus, QTextEdit:focus, QTextBrowser:focus, QListWidget:focus {
+    border: 1px solid #5bad91;
+}
+
+QTextBrowser#ChatView, QTextBrowser#PostDetail {
+    background: #fcfefb;
+}
+
+QPushButton {
+    background: #147a63;
+    color: white;
+    border: none;
+    border-radius: 14px;
+    padding: 10px 18px;
+    font-weight: 800;
+}
+
+QPushButton:hover {
+    background: #0f6d59;
+}
+
+QPushButton:pressed {
+    background: #0b5848;
+}
+
+QPushButton#SecondaryButton {
+    background: #d8a34a;
+    color: #2d2414;
+}
+
+QPushButton#SecondaryButton:hover {
+    background: #c79033;
+}
+
+QPushButton#GhostButton {
+    background: #eef6ef;
+    color: #1f604f;
+    border: 1px solid #cfe2d3;
+    padding: 8px 13px;
+}
+
+QPushButton#GhostButton:hover {
+    background: #e2f0e4;
+}
+
+QTabWidget::pane {
+    border: none;
+    background: #f6f8f4;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background: #e5eee4;
+    color: #596b5d;
+    padding: 11px 28px;
+    border-radius: 17px;
+    margin: 8px 4px 8px 0;
+    font-weight: 700;
+}
+
+QTabBar::tab:selected {
+    background: #ffffff;
+    color: #183c2e;
+    border: 1px solid #dfe9df;
+    font-weight: 900;
+}
+
+QListWidget#OnlineList::item {
+    padding: 10px;
+    border-radius: 12px;
+    margin: 2px;
+}
+
+QListWidget#PostsList {
+    background: transparent;
+    border: none;
+    padding: 2px;
+}
+
+QListWidget#PostsList::item {
+    background: transparent;
+    border: none;
+    padding: 0;
+}
+
+QListWidget#PostsList::item:selected {
+    background: #dff2ea;
+    border-radius: 18px;
+}
+
+#PostCard {
+    background: #ffffff;
+    border: 1px solid #e1e9e1;
+    border-radius: 18px;
+}
+
+#PostCard:hover {
+    background: #f5fbf7;
+    border: 1px solid #bddacb;
+}
+
+#PostCardTitle {
+    color: #183c2e;
+    font-size: 17px;
+    font-weight: 900;
+}
+
+#PostCardBody {
+    color: #4d5d50;
+    font-size: 13px;
+}
+
+#PostCardMeta {
+    color: #7a8b7d;
+    font-size: 12px;
+}
+
+QStatusBar {
+    background: #eef6ef;
+    color: #31583c;
+    border-top: 1px solid #dfe9df;
+}
+
+QSplitter::handle {
+    background: #eef3ee;
+    width: 8px;
+    height: 8px;
+}
+
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 2px;
+}
+
+QScrollBar::handle:vertical {
+    background: #c9d8cc;
+    border-radius: 5px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+/* v3: BBS 工作区分页和更紧凑的帖子卡片 */
+QTabWidget#BbsWorkTabs::pane {
+    border: none;
+    background: #f6f8f4;
+}
+
+QTabWidget#BbsWorkTabs QTabBar::tab {
+    padding: 10px 22px;
+    margin-top: 0;
+}
+
+#PostCard {
+    min-height: 72px;
+    max-height: 86px;
+}
+
+#PostCardTitle {
+    font-size: 15px;
+}
+
+#PostCardBody {
+    font-size: 12px;
+    color: #5c6b5f;
+}
+
+#PostCardMeta {
+    font-size: 11px;
+}
