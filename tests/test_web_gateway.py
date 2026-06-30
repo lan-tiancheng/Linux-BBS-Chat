@@ -33,14 +33,29 @@ def post(port, path, payload=None):
 
 def wait_for(port, session, cursor, predicate, timeout=4):
     deadline = time.time() + timeout
+    seen = []
     while time.time() < deadline:
         result = post(port, "/api/events", {"session": session, "cursor": cursor})
         cursor = result["cursor"]
         for event in result["events"]:
+            seen.append(event)
             if predicate(event):
                 return cursor, event
         time.sleep(0.1)
-    raise AssertionError("timed out waiting for expected event")
+    raise AssertionError(f"timed out waiting for expected event; seen={seen!r}")
+
+
+def collect_until(port, session, cursor, predicate, timeout=4):
+    deadline = time.time() + timeout
+    seen = []
+    while time.time() < deadline:
+        result = post(port, "/api/events", {"session": session, "cursor": cursor})
+        cursor = result["cursor"]
+        seen.extend(result["events"])
+        if any(predicate(event) for event in seen):
+            return cursor, seen
+        time.sleep(0.1)
+    raise AssertionError(f"timed out waiting for expected event; seen={seen!r}")
 
 
 def command(port, session, line):
@@ -118,9 +133,14 @@ def main():
         cursor, _ = wait_for(web_port, session, cursor, line_is("OK uploaded web.txt"))
 
         command(web_port, session, "BBS_LIST")
-        cursor, _ = wait_for(web_port, session, cursor, line_is("BBS_POSTS_BEGIN"))
-        cursor, _ = wait_for(web_port, session, cursor, line_starts("BBS_POST 1|alice|web title|web content|web.txt|"))
-        cursor, _ = wait_for(web_port, session, cursor, line_is("BBS_POSTS_END"))
+        cursor, events = collect_until(web_port, session, cursor, line_is("BBS_POSTS_END"))
+        lines = [event.get("line", "") for event in events]
+        assert "BBS_POSTS_BEGIN" in lines, lines
+        assert any(
+            line.startswith("BBS_POST 1|alice|web title|web content|web.txt|")
+            for line in lines
+        ), lines
+        assert "BBS_POSTS_END" in lines, lines
 
         command(web_port, session, "BBS_DOWNLOAD_POST 1")
         cursor, event = wait_for(web_port, session, cursor, lambda item: item.get("type") == "file")

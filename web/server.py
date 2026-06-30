@@ -58,6 +58,10 @@ class BackendSession:
 
     def _recv_exact(self, size):
         data = bytearray()
+        if self.buffer:
+            count = min(size, len(self.buffer))
+            data.extend(self.buffer[:count])
+            del self.buffer[:count]
         while len(data) < size:
             chunk = self.sock.recv(size - len(data))
             if not chunk:
