@@ -32,6 +32,7 @@ test: all
 	python3 tests/test_restart.py
 	python3 tests/test_storage_features.py
 	python3 tests/test_qt_bbs_protocol.py
+	python3 tests/test_web_gateway.py
 
 install: all
 	install -d $(DESTDIR)$(PREFIX)/bin

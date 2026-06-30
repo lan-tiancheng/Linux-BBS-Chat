@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Linux BBS Chat Web</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div>
+      <p class="eyebrow">Linux Socket Demo</p>
+      <h1>BBS Chat</h1>
+    </div>
+    <div class="status">
+      <span id="statusDot"></span>
+      <span id="statusText">连接中</span>
+    </div>
+    <nav>
+      <button class="nav active" data-tab="account">账号</button>
+      <button class="nav" data-tab="chat">聊天</button>
+      <button class="nav" data-tab="bbs">论坛</button>
+      <button class="nav" data-tab="files">文件</button>
+      <button class="nav" data-tab="backup">备份</button>
+      <button class="nav" data-tab="console">日志</button>
+    </nav>
+  </aside>
+
+  <main>
+    <section class="topbar">
+      <div>
+        <h2 id="pageTitle">账号</h2>
+        <p id="pageSub">注册或登录后使用聊天、论坛和文件功能。</p>
+      </div>
+      <button id="refreshBtn">刷新事件</button>
+    </section>
+
+    <section class="panel active" id="account">
+      <div class="grid two">
+        <form class="card" id="registerForm">
+          <h3>注册</h3>
+          <input name="username" placeholder="用户名" autocomplete="username" required>
+          <input name="password" placeholder="密码" type="password" autocomplete="new-password" required>
+          <button>注册</button>
+        </form>
+        <form class="card" id="loginForm">
+          <h3>登录</h3>
+          <input name="username" placeholder="用户名" autocomplete="username" required>
+          <input name="password" placeholder="密码" type="password" autocomplete="current-password" required>
+          <button>登录</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="panel" id="chat">
+      <div class="grid two">
+        <form class="card" id="groupForm">
+          <h3>群聊</h3>
+          <textarea name="message" placeholder="输入群聊内容" required></textarea>
+          <button>发送群聊</button>
+        </form>
+        <form class="card" id="privateForm">
+          <h3>私聊</h3>
+          <input name="target" placeholder="目标用户" required>
+          <textarea name="message" placeholder="输入私聊内容" required></textarea>
+          <button>发送私聊</button>
+        </form>
+      </div>
+      <div class="toolbar">
+        <button id="whoBtn">查看在线用户</button>
+        <button id="historyBtn">读取历史</button>
+      </div>
+      <div class="feed" id="chatFeed"></div>
+    </section>
+
+    <section class="panel" id="bbs">
+      <div class="grid two">
+        <form class="card" id="postForm">
+          <h3>发帖</h3>
+          <input name="title" placeholder="标题" required>
+          <textarea name="content" placeholder="内容" required></textarea>
+          <button>发布帖子</button>
+        </form>
+        <form class="card" id="replyForm">
+          <h3>回帖</h3>
+          <input name="postId" placeholder="帖子 ID" required>
+          <textarea name="content" placeholder="回复内容" required></textarea>
+          <button>提交回复</button>
+        </form>
+      </div>
+      <div class="toolbar">
+        <button id="listPostsBtn">刷新帖子列表</button>
+        <input id="viewPostId" placeholder="帖子 ID">
+        <button id="viewPostBtn">查看详情</button>
+      </div>
+      <div class="posts" id="postList"></div>
+      <div class="detail" id="postDetail"></div>
+    </section>
+
+    <section class="panel" id="files">
+      <div class="grid two">
+        <form class="card" id="chatUploadForm">
+          <h3>聊天文件</h3>
+          <input name="target" placeholder="接收用户" required>
+          <input name="file" type="file" required>
+          <button>上传给用户</button>
+        </form>
+        <form class="card" id="bbsUploadForm">
+          <h3>BBS 附件</h3>
+          <select name="kind">
+            <option value="post">帖子附件</option>
+            <option value="reply">回复附件</option>
+          </select>
+          <input name="id" placeholder="帖子/回复 ID" required>
+          <input name="file" type="file" required>
+          <button>上传附件</button>
+        </form>
+      </div>
+      <div class="grid two">
+        <form class="card" id="downloadForm">
+          <h3>聊天文件下载</h3>
+          <input name="filename" placeholder="文件名" required>
+          <button>下载</button>
+        </form>
+        <form class="card" id="bbsDownloadForm">
+          <h3>BBS 附件下载</h3>
+          <select name="kind">
+            <option value="post">帖子附件</option>
+            <option value="reply">回复附件</option>
+          </select>
+          <input name="id" placeholder="帖子/回复 ID" required>
+          <button>下载附件</button>
+        </form>
+      </div>
+      <div class="downloads" id="downloads"></div>
+    </section>
+
+    <section class="panel" id="backup">
+      <form class="card narrow" id="backupForm">
+        <h3>创建备份</h3>
+        <input name="label" placeholder="备份名称，例如 final">
+        <button>创建备份</button>
+      </form>
+    </section>
+
+    <section class="panel" id="console">
+      <div class="console" id="consoleLog"></div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

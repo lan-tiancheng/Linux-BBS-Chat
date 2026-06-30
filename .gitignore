@@ -15,6 +15,7 @@ frontend/qt_client/moc_*.h
 frontend/qt_client/qrc_*.cpp
 frontend/qt_client/bbs_chat_qt
 frontend/qt_client/downloads/*
+web/__pycache__/
 !logs/.gitkeep
 !uploads/.gitkeep
 !downloads/.gitkeep

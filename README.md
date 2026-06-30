@@ -12,6 +12,7 @@
 - `data/`、`logs/`、`uploads/`、`downloads/`、`backup/` 统一目录结构
 - `users.db`、`posts.db`、`replies.db`、`files.db`、`chat.log` 持久化保存
 - Docker 后端运行环境
+- Web 展示前端
 - 自动化集成测试
 
 ## 目录
@@ -20,6 +21,7 @@
 src/                    C 后端和命令行客户端源码
 include/                头文件
 frontend/qt_client/     Qt 图形客户端源码
+web/                    Web 展示前端和 HTTP/TCP 网关
 data/                   运行时数据文件，默认不提交
 logs/                   运行日志，默认不提交
 uploads/                服务端上传文件，默认不提交
@@ -54,6 +56,23 @@ Windows PowerShell 使用：
 ```powershell
 docker run --rm -it -p 8888:8888 -v "${PWD}:/workspace" -w /workspace linux-bbs-chat bash -lc "make all && ./bin/server 8888"
 ```
+
+## Docker 运行 Web 展示版
+
+Web 展示版会在容器内自动编译并启动 C 后端，然后启动浏览器访问的 Web 网关：
+
+```powershell
+docker build -t linux-bbs-chat-web .
+docker run --rm -it -p 8080:8080 -p 8888:8888 -v "${PWD}:/workspace" -w /workspace linux-bbs-chat-web sh web/run_web.sh
+```
+
+打开浏览器：
+
+```text
+http://127.0.0.1:8080
+```
+
+Web 页面支持注册、登录、群聊、私聊、历史、发帖、回帖、帖子列表、帖子详情、聊天文件、BBS 附件和备份。
 
 ## 命令行客户端
 
@@ -110,12 +129,14 @@ make test
 - 服务端重启和断开连接
 - 数据表、目录和备份结构
 - Qt 前端依赖的 BBS 协议、帖子/回复附件上传下载
+- Web 前端 HTTP/TCP 网关和核心展示功能
 
 ## 协议和存储文档
 
 - 后端协议：`docs/backend_protocol.md`
 - 存储设计：`docs/storage_design.md`
 - 项目报告：`docs/project_report.md`
+- Web 说明：`web/README.md`
 
 ## 提交前检查
 
