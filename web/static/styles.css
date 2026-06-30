@@ -13,24 +13,33 @@
 
 * { box-sizing: border-box; }
 
+html {
+  min-width: 320px;
+  background: var(--bg);
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: 236px 1fr;
+  min-height: 100svh;
+  overflow: hidden;
   background: var(--bg);
   color: var(--ink);
   font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
 }
 
 .sidebar {
-  min-height: 100vh;
-  padding: 24px 18px;
+  position: fixed;
+  inset: 0 auto 0 0;
+  width: 248px;
+  height: 100svh;
+  padding: 28px 18px;
   background: #102026;
   color: white;
   display: flex;
   flex-direction: column;
   gap: 24px;
+  overflow-y: auto;
+  z-index: 2;
 }
 
 .eyebrow {
@@ -96,8 +105,12 @@ button:hover { filter: brightness(0.95); }
 }
 
 main {
-  padding: 24px;
+  min-height: 100svh;
+  height: 100svh;
+  margin-left: 248px;
+  padding: clamp(18px, 2.4vw, 36px);
   min-width: 0;
+  overflow: auto;
 }
 
 .topbar {
@@ -119,7 +132,7 @@ main {
   margin-bottom: 16px;
 }
 
-.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); }
 
 .card {
   background: var(--panel);
@@ -133,6 +146,7 @@ main {
 .card.narrow { max-width: 520px; }
 
 input, textarea, select {
+  min-width: 0;
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -148,6 +162,7 @@ textarea {
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
   margin: 12px 0 16px;
@@ -192,9 +207,36 @@ textarea {
 }
 
 @media (max-width: 860px) {
-  body { grid-template-columns: 1fr; }
-  .sidebar { min-height: auto; }
+  body {
+    overflow: auto;
+  }
+
+  .sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    min-height: auto;
+    padding: 18px;
+  }
+
   nav { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .nav { text-align: center; }
+
+  main {
+    margin-left: 0;
+    height: auto;
+    min-height: auto;
+    overflow: visible;
+    padding: 18px;
+  }
+
   .grid.two { grid-template-columns: 1fr; }
   .topbar { align-items: flex-start; flex-direction: column; }
+}
+
+@media (max-width: 520px) {
+  nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .toolbar { align-items: stretch; flex-direction: column; }
+  .toolbar input { max-width: none; }
+  button { min-height: 44px; }
 }
