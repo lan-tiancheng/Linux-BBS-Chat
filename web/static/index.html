@@ -3,150 +3,207 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Linux BBS Chat Web</title>
+  <title>Linux BBS Chat</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <aside class="sidebar">
-    <div>
-      <p class="eyebrow">Linux Socket Demo</p>
-      <h1>BBS Chat</h1>
-    </div>
-    <div class="status">
-      <span id="statusDot"></span>
-      <span id="statusText">连接中</span>
-    </div>
-    <nav>
-      <button class="nav active" data-tab="account">账号</button>
-      <button class="nav" data-tab="chat">聊天</button>
-      <button class="nav" data-tab="bbs">论坛</button>
-      <button class="nav" data-tab="files">文件</button>
-      <button class="nav" data-tab="backup">备份</button>
-      <button class="nav" data-tab="console">日志</button>
-    </nav>
-  </aside>
+  <section class="login-shell" id="loginShell">
+    <form class="login-card" id="loginForm">
+      <p class="app-kicker">浅绿色 Web 前端</p>
+      <h1>Linux BBS Chat</h1>
+      <p class="login-subtitle">登录后进入聊天与 BBS 页面</p>
 
-  <main>
-    <section class="topbar">
+      <label>
+        <span>服务器 IP</span>
+        <input name="host" value="127.0.0.1" disabled>
+      </label>
+      <label>
+        <span>端口</span>
+        <input name="port" value="8888" disabled>
+      </label>
+      <label>
+        <span>用户名</span>
+        <input name="username" placeholder="字母 / 数字 / _ / -" autocomplete="username" required>
+      </label>
+      <label>
+        <span>密码</span>
+        <input name="password" placeholder="密码" type="password" autocomplete="current-password" required>
+      </label>
+
+      <div class="login-actions">
+        <button type="button" class="ghost" id="connectBtn">连接服务器</button>
+        <button type="button" class="ghost" id="registerBtn">注册</button>
+        <button type="submit">登录</button>
+      </div>
+      <div class="status-pill" id="loginStatus">先启动后端 server，再连接登录。</div>
+    </form>
+  </section>
+
+  <section class="app-shell hidden" id="appShell">
+    <header class="app-header">
       <div>
-        <h2 id="pageTitle">账号</h2>
-        <p id="pageSub">注册或登录后使用聊天、论坛和文件功能。</p>
+        <p class="app-kicker">Linux Socket Demo</p>
+        <h2>BBS Chat</h2>
       </div>
-      <button id="refreshBtn">刷新事件</button>
-    </section>
+      <div class="session-chip">
+        <span id="statusDot"></span>
+        <span id="sessionText">未登录</span>
+      </div>
+    </header>
 
-    <section class="panel active" id="account">
-      <div class="grid two">
-        <form class="card" id="registerForm">
-          <h3>注册</h3>
-          <input name="username" placeholder="用户名" autocomplete="username" required>
-          <input name="password" placeholder="密码" type="password" autocomplete="new-password" required>
-          <button>注册</button>
-        </form>
-        <form class="card" id="loginForm">
-          <h3>登录</h3>
-          <input name="username" placeholder="用户名" autocomplete="username" required>
-          <input name="password" placeholder="密码" type="password" autocomplete="current-password" required>
-          <button>登录</button>
-        </form>
-      </div>
-    </section>
+    <nav class="main-tabs">
+      <button class="tab active" data-page="chatPage">聊天 Chat</button>
+      <button class="tab" data-page="bbsPage">论坛 BBS</button>
+      <button class="tab" data-page="toolsPage">文件 / 备份</button>
+      <button class="tab" data-page="consolePage">协议日志</button>
+    </nav>
 
-    <section class="panel" id="chat">
-      <div class="grid two">
-        <form class="card" id="groupForm">
-          <h3>群聊</h3>
-          <textarea name="message" placeholder="输入群聊内容" required></textarea>
-          <button>发送群聊</button>
-        </form>
-        <form class="card" id="privateForm">
-          <h3>私聊</h3>
-          <input name="target" placeholder="目标用户" required>
-          <textarea name="message" placeholder="输入私聊内容" required></textarea>
-          <button>发送私聊</button>
-        </form>
-      </div>
-      <div class="toolbar">
-        <button id="whoBtn">查看在线用户</button>
-        <button id="historyBtn">读取历史</button>
-      </div>
-      <div class="feed" id="chatFeed"></div>
-    </section>
+    <main class="page active" id="chatPage">
+      <section class="split chat-split">
+        <article class="content-card chat-card">
+          <div class="section-head">
+            <div>
+              <h3>消息流</h3>
+              <p>私聊会标记为【私聊】；离线用户收到的私聊会保存到历史记录。</p>
+            </div>
+            <button class="ghost" id="historyBtn">读取历史</button>
+          </div>
+          <div class="chat-view" id="chatFeed">
+            <div class="empty">登录成功后，这里会显示历史群聊、历史私聊和实时消息。</div>
+          </div>
+          <div class="compose-row">
+            <input id="groupMessage" placeholder="输入群聊消息，回车发送">
+            <button id="sendGroupBtn">发送群聊</button>
+          </div>
+          <div class="compose-row private-row">
+            <input id="privateTarget" placeholder="私聊对象用户名">
+            <button class="secondary" id="sendPrivateBtn">发送私聊</button>
+          </div>
+        </article>
 
-    <section class="panel" id="bbs">
-      <div class="grid two">
-        <form class="card" id="postForm">
-          <h3>发帖</h3>
-          <input name="title" placeholder="标题" required>
-          <textarea name="content" placeholder="内容" required></textarea>
-          <button>发布帖子</button>
-        </form>
-        <form class="card" id="replyForm">
-          <h3>回帖</h3>
-          <input name="postId" placeholder="帖子 ID" required>
-          <textarea name="content" placeholder="回复内容" required></textarea>
-          <button>提交回复</button>
-        </form>
-      </div>
-      <div class="toolbar">
-        <button id="listPostsBtn">刷新帖子列表</button>
-        <input id="viewPostId" placeholder="帖子 ID">
-        <button id="viewPostBtn">查看详情</button>
-      </div>
-      <div class="posts" id="postList"></div>
-      <div class="detail" id="postDetail"></div>
-    </section>
+        <aside class="side-card">
+          <div class="section-head compact">
+            <h3>在线用户</h3>
+            <button class="ghost" id="refreshUsersBtn">刷新</button>
+          </div>
+          <div class="online-list" id="onlineList"></div>
+        </aside>
+      </section>
+    </main>
 
-    <section class="panel" id="files">
-      <div class="grid two">
-        <form class="card" id="chatUploadForm">
+    <main class="page" id="bbsPage">
+      <section class="split bbs-split">
+        <aside class="side-card posts-side">
+          <div class="section-head compact">
+            <h3>帖子广场</h3>
+            <button class="ghost" id="refreshPostsBtn">刷新</button>
+          </div>
+          <div class="posts-list" id="postList"></div>
+        </aside>
+
+        <article class="work-card">
+          <nav class="work-tabs">
+            <button class="work-tab active" data-work="createPostPane">发布帖子</button>
+            <button class="work-tab" data-work="detailPane" id="detailTab" disabled>查看 / 回复</button>
+          </nav>
+
+          <section class="work-pane active" id="createPostPane">
+            <div class="content-card">
+              <h3>发布新帖子</h3>
+              <p class="hint">可以选择附件一起上传；附件只属于你发布的帖子。</p>
+              <input id="postTitle" placeholder="帖子标题">
+              <textarea id="postContent" placeholder="帖子正文"></textarea>
+              <div class="file-row">
+                <input id="postAttachmentName" placeholder="可选附件路径" readonly>
+                <label class="file-button">
+                  选择附件
+                  <input id="postAttachment" type="file">
+                </label>
+                <button class="ghost" id="clearPostAttachmentBtn">清空</button>
+              </div>
+              <div class="align-right">
+                <button id="createPostBtn">发布帖子</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="work-pane" id="detailPane">
+            <div class="content-card detail-card">
+              <h3>帖子详情 / 回复</h3>
+              <div class="post-detail" id="postDetail">
+                <div class="empty">请先在左侧选择一个帖子。</div>
+              </div>
+              <div class="compose-card">
+                <h3>回复当前帖子</h3>
+                <p class="hint">回复附件只属于你自己的回复，其他用户不能替你的回复补附件。</p>
+                <textarea id="replyContent" placeholder="选择帖子后，在这里写回复"></textarea>
+                <div class="file-row">
+                  <input id="replyAttachmentName" placeholder="可选回复附件路径" readonly>
+                  <label class="file-button">
+                    选择附件
+                    <input id="replyAttachment" type="file">
+                  </label>
+                  <button class="ghost" id="clearReplyAttachmentBtn">清空</button>
+                </div>
+                <div class="align-right">
+                  <button class="secondary" id="replyBtn">回复帖子</button>
+                </div>
+              </div>
+            </div>
+          </section>
+        </article>
+      </section>
+    </main>
+
+    <main class="page" id="toolsPage">
+      <section class="tool-grid">
+        <article class="content-card">
           <h3>聊天文件</h3>
-          <input name="target" placeholder="接收用户" required>
-          <input name="file" type="file" required>
-          <button>上传给用户</button>
-        </form>
-        <form class="card" id="bbsUploadForm">
-          <h3>BBS 附件</h3>
-          <select name="kind">
-            <option value="post">帖子附件</option>
-            <option value="reply">回复附件</option>
-          </select>
-          <input name="id" placeholder="帖子/回复 ID" required>
-          <input name="file" type="file" required>
-          <button>上传附件</button>
-        </form>
-      </div>
-      <div class="grid two">
-        <form class="card" id="downloadForm">
+          <p class="hint">上传文件给指定在线或已注册用户。</p>
+          <input id="chatFileTarget" placeholder="接收用户">
+          <input id="chatFile" type="file">
+          <button id="chatUploadBtn">上传给用户</button>
+        </article>
+        <article class="content-card">
           <h3>聊天文件下载</h3>
-          <input name="filename" placeholder="文件名" required>
-          <button>下载</button>
-        </form>
-        <form class="card" id="bbsDownloadForm">
+          <input id="downloadName" placeholder="文件名">
+          <button id="downloadBtn">下载</button>
+        </article>
+        <article class="content-card">
           <h3>BBS 附件下载</h3>
-          <select name="kind">
-            <option value="post">帖子附件</option>
-            <option value="reply">回复附件</option>
-          </select>
-          <input name="id" placeholder="帖子/回复 ID" required>
-          <button>下载附件</button>
-        </form>
-      </div>
-      <div class="downloads" id="downloads"></div>
-    </section>
+          <div class="compose-row">
+            <select id="bbsDownloadKind">
+              <option value="post">帖子附件</option>
+              <option value="reply">回复附件</option>
+            </select>
+            <input id="bbsDownloadId" placeholder="帖子/回复 ID">
+          </div>
+          <button id="bbsDownloadBtn">下载附件</button>
+        </article>
+        <article class="content-card">
+          <h3>创建备份</h3>
+          <input id="backupLabel" placeholder="备份名称，例如 final">
+          <button id="backupBtn">创建备份</button>
+        </article>
+      </section>
+      <section class="content-card downloads-card">
+        <h3>下载结果</h3>
+        <div id="downloads"></div>
+      </section>
+    </main>
 
-    <section class="panel" id="backup">
-      <form class="card narrow" id="backupForm">
-        <h3>创建备份</h3>
-        <input name="label" placeholder="备份名称，例如 final">
-        <button>创建备份</button>
-      </form>
-    </section>
+    <main class="page" id="consolePage">
+      <section class="content-card">
+        <div class="section-head">
+          <h3>协议日志</h3>
+          <button class="ghost" id="clearLogBtn">清空</button>
+        </div>
+        <div class="console" id="consoleLog"></div>
+      </section>
+    </main>
 
-    <section class="panel" id="console">
-      <div class="console" id="consoleLog"></div>
-    </section>
-  </main>
+    <footer class="app-status" id="appStatus">已连接。</footer>
+  </section>
 
   <script src="/app.js"></script>
 </body>
