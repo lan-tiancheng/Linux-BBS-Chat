@@ -83,6 +83,10 @@ def main():
     environment["BBS_USERS_FILE"] = users_file.name
     environment["BBS_CHAT_LOG"] = chat_log.name
     environment["BBS_UPLOAD_DIR"] = upload_dir.name
+    environment["BBS_FRIENDS_FILE"] = os.path.join(upload_dir.name, "friends.db")
+    environment["BBS_PRIVATE_REQUESTS_FILE"] = os.path.join(upload_dir.name, "private_requests.db")
+    environment["BBS_GROUPS_FILE"] = os.path.join(upload_dir.name, "groups.db")
+    environment["BBS_GROUP_MEMBERS_FILE"] = os.path.join(upload_dir.name, "group_members.db")
 
     first_server = None
     second_server = None
@@ -90,7 +94,7 @@ def main():
     try:
         first_port = choose_port()
         first_server, client = start_server(first_port, environment)
-        send_line(client, "REGISTER persistent secret")
+        send_line(client, "REGISTER 100000001 Persist123 persist")
         assert receive_line(client) == "OK registered"
         send_line(client, "QUIT")
         assert receive_line(client) == "OK bye"
@@ -101,8 +105,8 @@ def main():
 
         second_port = choose_port()
         second_server, client = start_server(second_port, environment)
-        send_line(client, "LOGIN persistent secret")
-        assert receive_line(client) == "OK logged in persistent"
+        send_line(client, "LOGIN persist Persist123")
+        assert receive_line(client) == "OK logged in 100000001|persist"
 
         # Simulate a terminal or network disappearing without LOGOUT/QUIT.
         client.close()
@@ -111,9 +115,9 @@ def main():
         deadline = time.time() + 3
         while True:
             retry = connect_client(second_port)
-            send_line(retry, "LOGIN persistent secret")
+            send_line(retry, "LOGIN 100000001 Persist123")
             response = receive_line(retry)
-            if response == "OK logged in persistent":
+            if response == "OK logged in 100000001|persist":
                 client = retry
                 break
             retry.close()

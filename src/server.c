@@ -4,6 +4,7 @@
 #include "protocol.h"
 #include "storage.h"
 #include "server.h"
+#include "social.h"
 #include "user.h"
 
 #include <arpa/inet.h>
@@ -27,6 +28,7 @@ typedef struct {
     unsigned short port;
     int logged_in;
     char username[MAX_USERNAME_LENGTH + 1];
+    char nickname[MAX_NICKNAME_LENGTH + 1];
     pthread_mutex_t send_mutex;
 } ClientSlot;
 
@@ -59,6 +61,7 @@ static ClientSlot *register_client(int sockfd, const struct sockaddr_in *address
             selected->port = ntohs(address->sin_port);
             selected->logged_in = 0;
             selected->username[0] = '\0';
+            selected->nickname[0] = '\0';
             if (inet_ntop(AF_INET, &address->sin_addr, selected->peer,
                           sizeof(selected->peer)) == NULL) {
                 snprintf(selected->peer, sizeof(selected->peer), "unknown");
@@ -77,6 +80,7 @@ static void unregister_client(ClientSlot *client)
     client->sockfd = -1;
     client->logged_in = 0;
     client->username[0] = '\0';
+    client->nickname[0] = '\0';
     pthread_mutex_unlock(&clients_mutex);
 }
 
@@ -91,6 +95,18 @@ static int parse_credentials(const char *argument, char *username,
     return sscanf(argument, "%31s %63s %c", username, password, &extra) == 2;
 }
 
+static int parse_registration(const char *argument, char *account,
+                              char *password, char *nickname)
+{
+    char extra;
+
+    if (argument == NULL) {
+        return 0;
+    }
+    return sscanf(argument, "%9s %63s %31s %c", account, password, nickname,
+                  &extra) == 3;
+}
+
 static int client_is_logged_in(ClientSlot *client)
 {
     int logged_in;
@@ -101,7 +117,8 @@ static int client_is_logged_in(ClientSlot *client)
     return logged_in;
 }
 
-static int login_client(ClientSlot *client, const char *username)
+static int login_client(ClientSlot *client, const char *account,
+                        const char *nickname)
 {
     size_t i;
     int success = 1;
@@ -113,13 +130,14 @@ static int login_client(ClientSlot *client, const char *username)
     for (i = 0; success && i < MAX_CLIENTS; i++) {
         if (&clients[i] != client && clients[i].active &&
             clients[i].logged_in &&
-            strcmp(clients[i].username, username) == 0) {
+            strcmp(clients[i].username, account) == 0) {
             success = 0;
         }
     }
     if (success) {
         client->logged_in = 1;
-        snprintf(client->username, sizeof(client->username), "%s", username);
+        snprintf(client->username, sizeof(client->username), "%s", account);
+        snprintf(client->nickname, sizeof(client->nickname), "%s", nickname);
     }
     pthread_mutex_unlock(&clients_mutex);
     return success;
@@ -133,6 +151,7 @@ static int logout_client(ClientSlot *client)
     was_logged_in = client->logged_in;
     client->logged_in = 0;
     client->username[0] = '\0';
+    client->nickname[0] = '\0';
     pthread_mutex_unlock(&clients_mutex);
     return was_logged_in;
 }
@@ -232,47 +251,44 @@ static int send_download(ClientSlot *client, const char *filename)
     return result;
 }
 
-static int broadcast_message(const ClientSlot *sender, const char *message)
+static int send_to_account(const char *account, const char *line)
 {
-    char response[MAX_LINE_LENGTH + 64];
+    int delivered = 0;
     size_t i;
 
-    snprintf(response, sizeof(response), "MSG %s %s", sender->username,
-             message);
     pthread_mutex_lock(&clients_mutex);
     for (i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i].active && clients[i].logged_in) {
-            (void)slot_send_line(&clients[i], response);
+        if (clients[i].active && clients[i].logged_in &&
+            strcmp(clients[i].username, account) == 0) {
+            delivered = slot_send_line(&clients[i], line) == 0 ? 1 : -1;
+            break;
         }
     }
     pthread_mutex_unlock(&clients_mutex);
-    return chat_log_group(sender->username, message);
+    return delivered;
 }
 
 static int private_message(const ClientSlot *sender, const char *recipient,
                            const char *message)
 {
     char response[MAX_LINE_LENGTH + 64];
-    int delivery = 0;
-    size_t i;
 
     snprintf(response, sizeof(response), "PMSG %s %s", sender->username,
              message);
-    pthread_mutex_lock(&clients_mutex);
-    for (i = 0; i < MAX_CLIENTS; i++) {
-        if (clients[i].active && clients[i].logged_in &&
-            strcmp(clients[i].username, recipient) == 0) {
-            delivery = slot_send_line(&clients[i], response) == 0 ? 1 : -1;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&clients_mutex);
-
-    if (delivery == 1 &&
+    int delivery = send_to_account(recipient, response);
+    if (delivery >= 0 &&
         chat_log_private(sender->username, recipient, message) < 0) {
         return -2;
     }
     return delivery;
+}
+
+static void copy_client_nickname(ClientSlot *client, char *nickname,
+                                 size_t capacity)
+{
+    pthread_mutex_lock(&clients_mutex);
+    snprintf(nickname, capacity, "%s", client->nickname);
+    pthread_mutex_unlock(&clients_mutex);
 }
 
 static void copy_protocol_field(char *destination, size_t capacity,
@@ -352,6 +368,91 @@ typedef struct {
     ClientSlot *client;
     unsigned long count;
 } BbsListContext;
+
+typedef struct {
+    ClientSlot *client;
+    unsigned long count;
+} SocialListContext;
+
+static int send_friend_item(const char *account, void *context)
+{
+    SocialListContext *list = context;
+    UserRecord record;
+    char line[MAX_LINE_LENGTH];
+
+    if (user_find_by_account(account, &record) <= 0) {
+        return 0;
+    }
+    snprintf(line, sizeof(line), "FRIEND %s|%s", record.account,
+             record.nickname);
+    list->count++;
+    return slot_send_line(list->client, line) < 0 ? -1 : 0;
+}
+
+static int send_request_item(const char *from, const char *to,
+                             const char *message, void *context)
+{
+    SocialListContext *list = context;
+    UserRecord record;
+    char line[MAX_LINE_LENGTH * 2];
+
+    (void)to;
+    if (user_find_by_account(from, &record) <= 0) {
+        return 0;
+    }
+    snprintf(line, sizeof(line), "REQUEST %s|%s|%s", record.account,
+             record.nickname, message);
+    list->count++;
+    return slot_send_line(list->client, line) < 0 ? -1 : 0;
+}
+
+static int send_sent_request_item(const char *from, const char *to,
+                                  const char *message, void *context)
+{
+    SocialListContext *list = context;
+    UserRecord record;
+    char line[MAX_LINE_LENGTH * 2];
+
+    (void)from;
+    if (user_find_by_account(to, &record) <= 0) {
+        return 0;
+    }
+    snprintf(line, sizeof(line), "SENT_REQUEST %s|%s|%s", record.account,
+             record.nickname, message);
+    list->count++;
+    return slot_send_line(list->client, line) < 0 ? -1 : 0;
+}
+
+static int send_group_item(unsigned long id, const char *owner,
+                           const char *name, void *context)
+{
+    SocialListContext *list = context;
+    char line[MAX_LINE_LENGTH];
+
+    snprintf(line, sizeof(line), "GROUP_ITEM %lu|%s|%s", id, owner, name);
+    list->count++;
+    return slot_send_line(list->client, line) < 0 ? -1 : 0;
+}
+
+typedef struct {
+    const char *line;
+} GroupDeliveryContext;
+
+static int deliver_group_member(const char *account, void *context)
+{
+    GroupDeliveryContext *delivery = context;
+
+    (void)send_to_account(account, delivery->line);
+    return 0;
+}
+
+static void copy_account(char *destination, size_t capacity,
+                         const char *source)
+{
+    if (snprintf(destination, capacity, "%s", source) >= (int)capacity) {
+        destination[0] = '\0';
+    }
+}
 
 static int send_bbs_post_item(const BbsPostRecord *post, void *context)
 {
@@ -515,11 +616,22 @@ static int send_history(ClientSlot *client)
             }
             continue;
         }
+        if (sscanf(line, "[%31[^]]] [%15[^]]] %31s -> %31[^:]: %1087[^\n]",
+                   timestamp, type, sender, recipient, message) == 5 &&
+            strcmp(type, "GROUP") == 0) {
+            snprintf(response, sizeof(response), "HMSG %s|%s|%s|%s",
+                     timestamp, recipient, sender, message);
+            if (slot_send_line(client, response) < 0) {
+                fclose(file);
+                return 1;
+            }
+            continue;
+        }
         if (sscanf(line, "[%31[^]]] [%15[^]]] %31[^:]: %1087[^\n]",
                    timestamp, type, sender, message) == 4 &&
             strcmp(type, "GROUP") == 0) {
-            snprintf(response, sizeof(response), "HMSG %s|%s|%s", timestamp,
-                     sender, message);
+            snprintf(response, sizeof(response), "HMSG %s|group:0|%s|%s",
+                     timestamp, sender, message);
             if (slot_send_line(client, response) < 0) {
                 fclose(file);
                 return 1;
@@ -528,6 +640,85 @@ static int send_history(ClientSlot *client)
     }
     fclose(file);
     return slot_send_line(client, "HISTORY_END") < 0;
+}
+
+static int send_private_history(ClientSlot *client, const char *peer)
+{
+    FILE *file;
+    char line[MAX_LINE_LENGTH * 2];
+
+    if (slot_send_line(client, "PRIVATE_HISTORY_BEGIN") < 0) {
+        return 1;
+    }
+    file = fopen(storage_chat_log_file(), "r");
+    if (file == NULL) {
+        return slot_send_line(client, "PRIVATE_HISTORY_END") < 0;
+    }
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char timestamp[32];
+        char type[16];
+        char sender[MAX_USERNAME_LENGTH + 1];
+        char recipient[MAX_USERNAME_LENGTH + 1];
+        char message[MAX_LINE_LENGTH];
+        char response[MAX_LINE_LENGTH * 2];
+
+        line[strcspn(line, "\r\n")] = '\0';
+        if (sscanf(line, "[%31[^]]] [%15[^]]] %31s -> %31[^:]: %1087[^\n]",
+                   timestamp, type, sender, recipient, message) == 5 &&
+            strcmp(type, "PRIVATE") == 0 &&
+            ((strcmp(sender, client->username) == 0 &&
+              strcmp(recipient, peer) == 0) ||
+             (strcmp(sender, peer) == 0 &&
+              strcmp(recipient, client->username) == 0))) {
+            snprintf(response, sizeof(response), "HPMSG %s|%s|%s|%s",
+                     timestamp, sender, recipient, message);
+            if (slot_send_line(client, response) < 0) {
+                fclose(file);
+                return 1;
+            }
+        }
+    }
+    fclose(file);
+    return slot_send_line(client, "PRIVATE_HISTORY_END") < 0;
+}
+
+static int send_group_history(ClientSlot *client, unsigned long group_id)
+{
+    FILE *file;
+    char line[MAX_LINE_LENGTH * 2];
+
+    if (slot_send_line(client, "GROUP_HISTORY_BEGIN") < 0) {
+        return 1;
+    }
+    file = fopen(storage_chat_log_file(), "r");
+    if (file == NULL) {
+        return slot_send_line(client, "GROUP_HISTORY_END") < 0;
+    }
+    while (fgets(line, sizeof(line), file) != NULL) {
+        char timestamp[32];
+        char type[16];
+        char sender[MAX_USERNAME_LENGTH + 1];
+        char group_text[32];
+        char message[MAX_LINE_LENGTH];
+        char response[MAX_LINE_LENGTH * 2];
+        unsigned long logged_group_id = 0;
+
+        line[strcspn(line, "\r\n")] = '\0';
+        if (sscanf(line, "[%31[^]]] [%15[^]]] %31s -> %31[^:]: %1087[^\n]",
+                   timestamp, type, sender, group_text, message) == 5 &&
+            strcmp(type, "GROUP") == 0 &&
+            sscanf(group_text, "group-%lu", &logged_group_id) == 1 &&
+            logged_group_id == group_id) {
+            snprintf(response, sizeof(response), "HGMSG %s|%lu|%s|%s",
+                     timestamp, group_id, sender, message);
+            if (slot_send_line(client, response) < 0) {
+                fclose(file);
+                return 1;
+            }
+        }
+    }
+    fclose(file);
+    return slot_send_line(client, "GROUP_HISTORY_END") < 0;
 }
 
 static int append_uploaded_file_record(const char *sender,
@@ -578,7 +769,8 @@ static void send_client_list(ClientSlot *requester)
             continue;
         }
         written = snprintf(response + used, sizeof(response) - used,
-                           " %s", clients[i].username);
+                           " %s|%s", clients[i].username,
+                           clients[i].nickname);
         if (written < 0 || (size_t)written >= sizeof(response) - used) {
             break;
         }
@@ -600,8 +792,12 @@ static int handle_command(ClientSlot *client, char *line)
     if (strcmp(line, "HELP") == 0) {
         return slot_send_line(
                    client,
-                   "COMMANDS REGISTER <user> <pass> LOGIN <user> <pass> "
-                   "LOGOUT WHO HISTORY GROUP <text> PRIVATE <user> <text> "
+                   "COMMANDS REGISTER <account9> <pass> <nickname> "
+                   "LOGIN <account-or-nickname> <pass> LOGOUT WHO HISTORY "
+                   "HISTORY_PRIVATE HISTORY_GROUP "
+                   "SEARCH_USER FRIENDS REQUESTS SENT_REQUESTS "
+                   "PRIVATE_START PRIVATE_REPLY "
+                   "GROUP_CREATE GROUPS GROUP_SEND "
                    "UPLOAD <user> <local-path> DOWNLOAD <filename> "
                    "POST <title> <content> REPLY <post_id> <content> "
                    "LISTPOST VIEWPOST <post_id> "
@@ -649,19 +845,20 @@ static int handle_command(ClientSlot *client, char *line)
         return slot_send_line(client, response) < 0;
     }
     if (strcmp(line, "REGISTER") == 0) {
-        char username[MAX_USERNAME_LENGTH + 1];
+        char account[USER_ACCOUNT_LENGTH + 1];
         char password[MAX_PASSWORD_LENGTH + 1];
+        char nickname[MAX_NICKNAME_LENGTH + 1];
         UserResult result;
 
-        if (!parse_credentials(argument, username, password)) {
+        if (!parse_registration(argument, account, password, nickname)) {
             return slot_send_line(client,
-                                  "ERR usage: REGISTER <user> <pass>") < 0;
+                                  "ERR usage: REGISTER <account9> <pass> <nickname>") < 0;
         }
         if (client_is_logged_in(client)) {
             return slot_send_line(client,
                                   "ERR logout before registering") < 0;
         }
-        result = user_register(username, password);
+        result = user_register(account, password, nickname);
         if (result != USER_OK) {
             snprintf(response, sizeof(response), "ERR %s",
                      user_result_message(result));
@@ -670,45 +867,135 @@ static int handle_command(ClientSlot *client, char *line)
         return slot_send_line(client, "OK registered") < 0;
     }
     if (strcmp(line, "LOGIN") == 0) {
-        char username[MAX_USERNAME_LENGTH + 1];
+        char login[MAX_NICKNAME_LENGTH + 1];
         char password[MAX_PASSWORD_LENGTH + 1];
+        UserRecord record;
         UserResult result;
 
-        if (!parse_credentials(argument, username, password)) {
+        if (!parse_credentials(argument, login, password)) {
             return slot_send_line(client,
-                                  "ERR usage: LOGIN <user> <pass>") < 0;
+                                  "ERR usage: LOGIN <account-or-nickname> <pass>") < 0;
         }
         if (client_is_logged_in(client)) {
             return slot_send_line(client, "ERR already logged in") < 0;
         }
-        result = user_authenticate(username, password);
+        result = user_authenticate(login, password, &record);
         if (result != USER_OK) {
             snprintf(response, sizeof(response), "ERR %s",
                      user_result_message(result));
             return slot_send_line(client, response) < 0;
         }
-        if (!login_client(client, username)) {
+        if (!login_client(client, record.account, record.nickname)) {
             return slot_send_line(client,
                                   "ERR user already logged in") < 0;
         }
-        snprintf(response, sizeof(response), "OK logged in %s", username);
+        snprintf(response, sizeof(response), "OK logged in %s|%s",
+                 record.account, record.nickname);
         return slot_send_line(client, response) < 0;
     }
-    if (strcmp(line, "GROUP") == 0 || strcmp(line, "BROADCAST") == 0) {
+    if (strcmp(line, "SEARCH_USER") == 0) {
+        UserRecord record;
+
         if (!client_is_logged_in(client)) {
             return slot_send_line(client, "ERR login required") < 0;
         }
         if (argument == NULL || *argument == '\0') {
-            return slot_send_line(client, "ERR GROUP requires text") < 0;
-        }
-        if (broadcast_message(client, argument) < 0) {
             return slot_send_line(client,
-                                  "ERR message delivered but log failed") < 0;
+                                  "ERR usage: SEARCH_USER <account-or-nickname>") < 0;
+        }
+        if (user_find(argument, &record) <= 0) {
+            return slot_send_line(client, "ERR user not found") < 0;
+        }
+        snprintf(response, sizeof(response), "USER %s|%s", record.account,
+                 record.nickname);
+        return slot_send_line(client, response) < 0;
+    }
+    if (strcmp(line, "HISTORY_PRIVATE") == 0) {
+        UserRecord peer;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (argument == NULL || *argument == '\0' ||
+            user_find(argument, &peer) <= 0) {
+            return slot_send_line(
+                       client,
+                       "ERR usage: HISTORY_PRIVATE <account-or-nickname>") < 0;
+        }
+        return send_private_history(client, peer.account);
+    }
+    if (strcmp(line, "HISTORY_GROUP") == 0) {
+        unsigned long group_id;
+        char *end = NULL;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (argument == NULL || *argument == '\0') {
+            return slot_send_line(client,
+                                  "ERR usage: HISTORY_GROUP <group_id>") < 0;
+        }
+        group_id = strtoul(argument, &end, 10);
+        if (end == NULL || *end != '\0' || group_id == 0 ||
+            !social_is_group_member(group_id, client->username)) {
+            return slot_send_line(client, "ERR group not found") < 0;
+        }
+        return send_group_history(client, group_id);
+    }
+    if (strcmp(line, "FRIENDS") == 0) {
+        SocialListContext context;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        context.client = client;
+        context.count = 0;
+        if (slot_send_line(client, "FRIENDS_BEGIN") < 0 ||
+            social_visit_friends(client->username, send_friend_item,
+                                 &context) < 0 ||
+            slot_send_line(client, "FRIENDS_END") < 0) {
+            return 1;
         }
         return 0;
     }
-    if (strcmp(line, "PRIVATE") == 0) {
+    if (strcmp(line, "REQUESTS") == 0) {
+        SocialListContext context;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        context.client = client;
+        context.count = 0;
+        if (slot_send_line(client, "REQUESTS_BEGIN") < 0 ||
+            social_visit_requests_for(client->username, send_request_item,
+                                      &context) < 0 ||
+            slot_send_line(client, "REQUESTS_END") < 0) {
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(line, "SENT_REQUESTS") == 0) {
+        SocialListContext context;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        context.client = client;
+        context.count = 0;
+        if (slot_send_line(client, "SENT_REQUESTS_BEGIN") < 0 ||
+            social_visit_sent_requests_for(client->username,
+                                           send_sent_request_item,
+                                           &context) < 0 ||
+            slot_send_line(client, "SENT_REQUESTS_END") < 0) {
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(line, "PRIVATE_START") == 0 ||
+        strcmp(line, "PRIVATE_REPLY") == 0 ||
+        strcmp(line, "PRIVATE") == 0) {
         char *message;
+        UserRecord target;
         int delivery;
 
         if (!client_is_logged_in(client)) {
@@ -716,51 +1003,146 @@ static int handle_command(ClientSlot *client, char *line)
         }
         if (argument == NULL || (message = strchr(argument, ' ')) == NULL) {
             return slot_send_line(
-                       client, "ERR usage: PRIVATE <user> <text>") < 0;
+                       client,
+                       "ERR usage: PRIVATE_START <account-or-nickname> <text>") < 0;
         }
         *message++ = '\0';
         while (*message == ' ') {
             message++;
         }
-        if (!user_valid_username(argument) || *message == '\0') {
-            return slot_send_line(
-                       client, "ERR usage: PRIVATE <user> <text>") < 0;
+        if (*message == '\0' || user_find(argument, &target) <= 0) {
+            return slot_send_line(client, "ERR user not found") < 0;
         }
-        if (strcmp(client->username, argument) == 0) {
+        if (strcmp(client->username, target.account) == 0) {
             return slot_send_line(
                        client,
                        "ERR cannot send private message to yourself") < 0;
         }
-        if (user_exists(argument) <= 0) {
-            return slot_send_line(client, "ERR user does not exist") < 0;
-        }
-        delivery = private_message(client, argument, message);
-        if (delivery == 0) {
-            if (chat_log_private(client->username, argument, message) < 0) {
-                return slot_send_line(client,
-                                      "ERR private log failed") < 0;
+        if (strcmp(line, "PRIVATE_REPLY") == 0) {
+            if (social_has_private_request(target.account, client->username)) {
+                (void)social_add_friend_pair(client->username, target.account);
+            } else if (!social_are_friends(client->username, target.account)) {
+                return slot_send_line(
+                           client,
+                           "ERR no incoming request from this user") < 0;
             }
+        } else if (!social_are_friends(client->username, target.account)) {
+            if (social_add_private_request(client->username, target.account,
+                                           message) < 0) {
+                return slot_send_line(client, "ERR request save failed") < 0;
+            }
+        }
+        delivery = private_message(client, target.account, message);
+        if (delivery < 0) {
+            return slot_send_line(client,
+                                  "ERR private delivery failed") < 0;
+        }
+        if (social_are_friends(client->username, target.account)) {
+            return slot_send_line(client, "OK private message sent") < 0;
+        }
+        return slot_send_line(client, "OK private request sent") < 0;
+    }
+    if (strcmp(line, "GROUPS") == 0) {
+        SocialListContext context;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        context.client = client;
+        context.count = 0;
+        if (slot_send_line(client, "GROUPS_BEGIN") < 0 ||
+            social_visit_groups_for(client->username, send_group_item,
+                                    &context) < 0 ||
+            slot_send_line(client, "GROUPS_END") < 0) {
+            return 1;
+        }
+        return 0;
+    }
+    if (strcmp(line, "GROUP_CREATE") == 0) {
+        char *members_text;
+        char *token;
+        char member_storage[32][USER_ACCOUNT_LENGTH + 1];
+        const char *member_accounts[32];
+        char group_name[64];
+        size_t count = 0;
+        unsigned long group_id = 0;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (argument == NULL || (members_text = strchr(argument, ' ')) == NULL) {
             return slot_send_line(
                        client,
-                       "OK private message stored for offline user") < 0;
+                       "ERR usage: GROUP_CREATE <name> <friend1,friend2>") < 0;
         }
-        if (delivery == -1) {
-            return slot_send_line(client, "ERR private delivery failed") < 0;
+        *members_text++ = '\0';
+        copy_protocol_field(group_name, sizeof(group_name), argument);
+        token = strtok(members_text, ",");
+        while (token != NULL && count < 32) {
+            UserRecord member;
+
+            if (user_find(token, &member) > 0 &&
+                social_are_friends(client->username, member.account)) {
+                copy_account(member_storage[count], sizeof(member_storage[count]),
+                             member.account);
+                member_accounts[count] = member_storage[count];
+                count++;
+            }
+            token = strtok(NULL, ",");
         }
-        if (delivery == -2) {
-            return slot_send_line(
-                       client, "ERR message delivered but log failed") < 0;
+        if (count == 0) {
+            return slot_send_line(client,
+                                  "ERR group needs at least one friend") < 0;
         }
-        return slot_send_line(client, "OK private message sent") < 0;
+        if (social_create_group(client->username, group_name, member_accounts,
+                                count, &group_id) < 0) {
+            return slot_send_line(client, "ERR group create failed") < 0;
+        }
+        snprintf(response, sizeof(response), "OK group %lu created", group_id);
+        return slot_send_line(client, response) < 0;
+    }
+    if (strcmp(line, "GROUP_SEND") == 0) {
+        unsigned long group_id;
+        char *message;
+        char *end = NULL;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (argument == NULL || (message = strchr(argument, ' ')) == NULL) {
+            return slot_send_line(client,
+                                  "ERR usage: GROUP_SEND <group_id> <text>") < 0;
+        }
+        *message++ = '\0';
+        group_id = strtoul(argument, &end, 10);
+        if (end == NULL || *end != '\0' || group_id == 0 ||
+            !social_is_group_member(group_id, client->username)) {
+            return slot_send_line(client, "ERR group not found") < 0;
+        }
+        /* Delivery is handled below with a simple member visitor context. */
+        snprintf(response, sizeof(response), "GMSG %lu %s %s", group_id,
+                 client->username, message);
+        GroupDeliveryContext delivery = {response};
+        if (social_visit_group_members(group_id, deliver_group_member,
+                                       &delivery) < 0 ||
+            chat_log_group(group_id, client->username, message) < 0) {
+            return slot_send_line(client, "ERR group send failed") < 0;
+        }
+        return 0;
+    }
+    if (strcmp(line, "GROUP") == 0 || strcmp(line, "BROADCAST") == 0) {
+        return slot_send_line(
+                   client,
+                   "ERR global group removed; use GROUP_CREATE and GROUP_SEND") < 0;
     }
     if (strcmp(line, "UPLOAD") == 0) {
-        char recipient[MAX_USERNAME_LENGTH + 1];
+        char recipient[MAX_NICKNAME_LENGTH + 1];
         char filename[MAX_FILENAME_LENGTH + 1];
         char size_text[32];
         char sender[MAX_USERNAME_LENGTH + 1];
         char extra;
         unsigned long long size;
-        int recipient_exists;
+        UserRecord recipient_record;
 
         if (argument == NULL ||
             sscanf(argument, "%31s %127s %31s %c", recipient, filename,
@@ -773,7 +1155,7 @@ static int handle_command(ClientSlot *client, char *line)
             (void)slot_send_line(client, "ERR invalid file size");
             return 1;
         }
-        if (!user_valid_username(recipient) || !file_name_valid(filename)) {
+        if (!file_name_valid(filename)) {
             if (file_discard_contents(client->sockfd, size) < 0) {
                 return 1;
             }
@@ -786,33 +1168,30 @@ static int handle_command(ClientSlot *client, char *line)
             }
             return slot_send_line(client, "ERR login required") < 0;
         }
-        recipient_exists = user_exists(recipient);
-        if (recipient_exists <= 0) {
+        if (user_find(recipient, &recipient_record) <= 0) {
             if (file_discard_contents(client->sockfd, size) < 0) {
                 return 1;
             }
-            return slot_send_line(
-                       client, recipient_exists == 0
-                                   ? "ERR recipient does not exist"
-                                   : "ERR user storage error") < 0;
+            return slot_send_line(client, "ERR recipient does not exist") < 0;
         }
-        if (file_store_upload(client->sockfd, recipient, filename, size) < 0) {
+        if (file_store_upload(client->sockfd, recipient_record.account,
+                              filename, size) < 0) {
             return slot_send_line(client, "ERR upload failed") < 0;
         }
         copy_client_username(client, sender, sizeof(sender));
-        if (append_uploaded_file_record(sender, recipient, filename, size) <
-            0) {
+        if (append_uploaded_file_record(sender, recipient_record.account,
+                                        filename, size) < 0) {
             char path[4096];
 
-            if (file_server_path(recipient, filename, path, sizeof(path)) ==
-                0) {
+            if (file_server_path(recipient_record.account, filename, path,
+                                 sizeof(path)) == 0) {
                 unlink(path);
             }
             return slot_send_line(client, "ERR upload record failed") < 0;
         }
-        notify_file_ready(sender, recipient, filename, size);
+        notify_file_ready(sender, recipient_record.account, filename, size);
         snprintf(response, sizeof(response), "OK uploaded %s for %s", filename,
-                 recipient);
+                 recipient_record.nickname);
         return slot_send_line(client, response) < 0;
     }
     if (strcmp(line, "DOWNLOAD") == 0) {
@@ -856,7 +1235,7 @@ static int handle_command(ClientSlot *client, char *line)
         if (bbs_next_post_id(&record.id) < 0) {
             return slot_send_line(client, "ERR post id failed") < 0;
         }
-        copy_client_username(client, record.author, sizeof(record.author));
+        copy_client_nickname(client, record.author, sizeof(record.author));
         snprintf(record.title, sizeof(record.title), "%s", title);
         snprintf(record.content, sizeof(record.content), "%s", content);
         format_timestamp(timestamp, sizeof(timestamp));
@@ -900,7 +1279,7 @@ static int handle_command(ClientSlot *client, char *line)
             return slot_send_line(client, "ERR reply id failed") < 0;
         }
         record.post_id = post_id;
-        copy_client_username(client, record.author, sizeof(record.author));
+        copy_client_nickname(client, record.author, sizeof(record.author));
         snprintf(record.content, sizeof(record.content), "%s", message);
         format_timestamp(timestamp, sizeof(timestamp));
         snprintf(record.created_at, sizeof(record.created_at), "%s", timestamp);
@@ -1044,7 +1423,7 @@ static int handle_command(ClientSlot *client, char *line)
         if (bbs_next_post_id(&record.id) < 0) {
             return slot_send_line(client, "ERR post id failed") < 0;
         }
-        copy_client_username(client, record.author, sizeof(record.author));
+        copy_client_nickname(client, record.author, sizeof(record.author));
         copy_protocol_field(record.title, sizeof(record.title), argument);
         copy_protocol_field(record.content, sizeof(record.content), separator);
         format_timestamp(timestamp, sizeof(timestamp));
@@ -1089,7 +1468,7 @@ static int handle_command(ClientSlot *client, char *line)
             return slot_send_line(client, "ERR reply id failed") < 0;
         }
         record.post_id = post_id;
-        copy_client_username(client, record.author, sizeof(record.author));
+        copy_client_nickname(client, record.author, sizeof(record.author));
         copy_protocol_field(record.content, sizeof(record.content), separator);
         format_timestamp(timestamp, sizeof(timestamp));
         snprintf(record.created_at, sizeof(record.created_at), "%s", timestamp);
@@ -1109,7 +1488,7 @@ static int handle_command(ClientSlot *client, char *line)
         char *end = NULL;
         unsigned long object_id;
         unsigned long long size;
-        char username[MAX_USERNAME_LENGTH + 1];
+        char username[MAX_NICKNAME_LENGTH + 1];
         char owner[32];
         char stored_path[256];
 
@@ -1146,7 +1525,7 @@ static int handle_command(ClientSlot *client, char *line)
             }
             return slot_send_line(client, "ERR invalid id") < 0;
         }
-        copy_client_username(client, username, sizeof(username));
+        copy_client_nickname(client, username, sizeof(username));
         if (strcmp(line, "BBS_UPLOAD_POST") == 0) {
             BbsPostRecord post;
 
@@ -1304,6 +1683,10 @@ int run_server(int port)
     }
     if (file_transfer_init() < 0) {
         perror("initialize upload directory");
+        return 1;
+    }
+    if (social_init() < 0) {
+        perror("initialize social storage");
         return 1;
     }
     for (i = 0; i < MAX_CLIENTS; i++) {

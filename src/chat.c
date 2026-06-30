@@ -61,9 +61,13 @@ int chat_log_init(void)
     return file == NULL ? -1 : 0;
 }
 
-int chat_log_group(const char *sender, const char *message)
+int chat_log_group(unsigned long group_id, const char *sender,
+                   const char *message)
 {
-    return write_log_entry("GROUP", sender, NULL, message);
+    char group_text[32];
+
+    snprintf(group_text, sizeof(group_text), "group-%lu", group_id);
+    return write_log_entry("GROUP", sender, group_text, message);
 }
 
 int chat_log_private(const char *sender, const char *recipient,

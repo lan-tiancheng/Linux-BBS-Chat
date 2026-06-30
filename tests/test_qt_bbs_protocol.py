@@ -79,14 +79,14 @@ def main():
         alice = connect_client(port)
         bob = connect_client(port)
 
-        send_line(alice, "REGISTER alice pass-a")
+        send_line(alice, "REGISTER 100000001 Alpha123 alpha")
         assert receive_line(alice) == "OK registered"
-        send_line(alice, "LOGIN alice pass-a")
-        assert receive_line(alice) == "OK logged in alice"
-        send_line(bob, "REGISTER bob pass-b")
+        send_line(alice, "LOGIN alpha Alpha123")
+        assert receive_line(alice) == "OK logged in 100000001|alpha"
+        send_line(bob, "REGISTER 100000002 Beta123 beta")
         assert receive_line(bob) == "OK registered"
-        send_line(bob, "LOGIN bob pass-b")
-        assert receive_line(bob) == "OK logged in bob"
+        send_line(bob, "LOGIN beta Beta123")
+        assert receive_line(bob) == "OK logged in 100000002|beta"
 
         send_line(alice, "BBS_CREATE qt title|qt content")
         assert receive_line(alice) == "OK post 1 created"
@@ -110,7 +110,7 @@ def main():
         assert receive_line(bob) == "BBS_POSTS_BEGIN"
         post_line = receive_line(bob)
         assert post_line.startswith(
-            "BBS_POST 1|alice|qt title|qt content|post.txt|"
+            "BBS_POST 1|alpha|qt title|qt content|post.txt|"
         ), post_line
         assert receive_line(bob) == "BBS_POSTS_END"
 
@@ -118,12 +118,12 @@ def main():
         assert receive_line(bob) == "BBS_POST_BEGIN"
         post_line = receive_line(bob)
         assert post_line.startswith(
-            "BBS_POST 1|alice|qt title|qt content|post.txt|"
+            "BBS_POST 1|alpha|qt title|qt content|post.txt|"
         ), post_line
         assert receive_line(bob) == "BBS_REPLIES_BEGIN"
         reply_line = receive_line(bob)
         assert reply_line.startswith(
-            "BBS_REPLY 1|1|bob|reply from bob|reply.txt|"
+            "BBS_REPLY 1|1|beta|reply from bob|reply.txt|"
         ), reply_line
         assert receive_line(bob) == "BBS_REPLIES_END"
         assert receive_line(bob) == "BBS_POST_END"
@@ -136,14 +136,37 @@ def main():
         assert receive_line(alice) == f"BBS_FILE reply.txt {len(reply_payload)}"
         assert receive_bytes(alice, len(reply_payload)) == reply_payload
 
-        send_line(alice, "GROUP qt-history-check")
+        send_line(alice, "PRIVATE_START beta request")
+        assert receive_line(bob) == "PMSG 100000001 request"
+        assert receive_line(alice) == "OK private request sent"
+        send_line(bob, "PRIVATE_REPLY alpha accepted")
+        assert receive_line(alice) == "PMSG 100000002 accepted"
+        assert receive_line(bob) == "OK private message sent"
+        send_line(alice, "GROUP_CREATE qtgroup beta")
+        assert receive_line(alice) == "OK group 1 created"
+        send_line(alice, "GROUP_SEND 1 qt-history-check")
         assert receive_line(alice).endswith(" qt-history-check")
         assert receive_line(bob).endswith(" qt-history-check")
         send_line(alice, "HISTORY")
         assert receive_line(alice) == "HISTORY_BEGIN"
-        history_line = receive_line(alice)
-        assert "qt-history-check" in history_line, history_line
-        assert receive_line(alice) == "HISTORY_END"
+        history_lines = []
+        while True:
+            history_line = receive_line(alice)
+            if history_line == "HISTORY_END":
+                break
+            history_lines.append(history_line)
+        assert any("qt-history-check" in line for line in history_lines), history_lines
+
+        send_line(alice, "HISTORY_GROUP 1")
+        assert receive_line(alice) == "GROUP_HISTORY_BEGIN"
+        group_history = receive_line(alice)
+        assert group_history.startswith("HGMSG "), group_history
+        assert group_history.split("|")[1:] == [
+            "1",
+            "100000001",
+            "qt-history-check",
+        ], group_history
+        assert receive_line(alice) == "GROUP_HISTORY_END"
 
         files_file = os.path.join(environment["BBS_DATA_DIR"], "files.db")
         with open(files_file, encoding="utf-8") as handle:

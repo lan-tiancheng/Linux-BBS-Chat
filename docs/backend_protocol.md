@@ -5,8 +5,8 @@ The server listens on TCP port `8888` by default. Commands and normal responses 
 ## Accounts
 
 ```text
-REGISTER <username> <password>
-LOGIN <username> <password>
+REGISTER <account9> <password> <nickname>
+LOGIN <account-or-nickname> <password>
 LOGOUT
 WHO
 QUIT
@@ -16,33 +16,35 @@ Examples:
 
 ```text
 OK registered
-OK logged in alice
+OK logged in 100000001|alpha
 OK logged out
-ONLINE 2 alice bob
+ONLINE 2 100000001|alpha 100000002|beta
 ```
 
-The same username cannot be logged in from two connections at the same time.
+Accounts must be exactly 9 digits. Passwords must be longer than 6 characters and contain both letters and digits. Nicknames and accounts are unique. The same account cannot be logged in from two connections at the same time.
 
 ## Chat
 
 ```text
-GROUP <message>
-PRIVATE <username> <message>
+SEARCH_USER <account-or-nickname>
+FRIENDS
+REQUESTS
+PRIVATE_START <account-or-nickname> <message>
+PRIVATE_REPLY <account-or-nickname> <message>
+GROUP_CREATE <group_name> <friend1,friend2,...>
+GROUPS
+GROUP_SEND <group_id> <message>
 HISTORY
 ```
 
 Realtime events:
 
 ```text
-MSG <sender> <message>
+GMSG <group_id> <sender> <message>
 PMSG <sender> <message>
 ```
 
-Private messages are delivered immediately when the target user is online. If the target user is registered but offline, the message is saved to `logs/chat.log` and the sender receives:
-
-```text
-OK private message stored for offline user
-```
+Private chat starts as a request. A non-friend may send one initial message with `PRIVATE_START`. When the receiver replies with `PRIVATE_REPLY`, both users become friends. Groups are created from existing friends only; the old global group chat is removed.
 
 History response:
 

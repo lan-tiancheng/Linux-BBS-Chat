@@ -1,11 +1,35 @@
+const SESSION_KEY = "linux-bbs-chat-session";
+
 let session = "";
 let cursor = 0;
-let currentUser = "";
+let currentAccount = "";
+let currentNickname = "";
+let currentMode = "none";
+let currentTarget = "";
+let currentTitle = "";
+let currentGroupId = "";
 let currentPostId = 0;
 let selectedPostAttachment = null;
 let selectedReplyAttachment = null;
 let pendingPostAttachment = null;
 let pendingReplyAttachment = null;
+let collectingPosts = false;
+let postRows = [];
+let collectingDetail = false;
+let detailRows = [];
+let collectingFriends = false;
+let collectingRequests = false;
+let collectingSentRequests = false;
+let collectingGroups = false;
+let collectingPrivateHistory = false;
+let collectingGroupHistory = false;
+let loadingConversationKey = "";
+let activeConversationKey = "";
+let conversations = {};
+let friends = [];
+let requests = [];
+let sentRequests = [];
+let groups = [];
 
 const $ = (id) => document.getElementById(id);
 
@@ -45,16 +69,34 @@ async function api(path, payload = {}) {
 
 async function ensureSession() {
   if (session) return;
-  const data = await api("/api/session");
+  const saved = localStorage.getItem(SESSION_KEY) || "";
+  const data = await api("/api/session", saved ? { session: saved } : {});
   session = data.session;
-  setLoginStatus("服务器已连接，可以登录或注册。");
-  log(`< ${data.greeting}`);
+  localStorage.setItem(SESSION_KEY, session);
+  setLoginStatus(data.resumed ? "已恢复浏览器会话。" : "已连接后端。");
+  if (data.greeting) log(`< ${data.greeting}`);
+  if (data.currentAccount) {
+    activateShell(data.currentAccount, data.currentNickname || data.currentAccount, true);
+  }
 }
 
 async function send(command) {
   await ensureSession();
   log(`> ${command}`);
   await api("/api/command", { session, command });
+}
+
+async function resetBackendSession(logout = true) {
+  if (session) {
+    try {
+      await api("/api/close", { session, logout });
+    } catch (error) {
+      log(`reset session: ${error.message || error}`, "error");
+    }
+  }
+  session = "";
+  cursor = 0;
+  localStorage.removeItem(SESSION_KEY);
 }
 
 async function upload(command, file) {
@@ -70,6 +112,11 @@ async function upload(command, file) {
     command,
     data: btoa(binary),
   });
+}
+
+function parseIdentity(text) {
+  const [account = "", nickname = ""] = String(text || "").split("|");
+  return { account, nickname: nickname || account };
 }
 
 function parseBbsPost(line) {
@@ -96,15 +143,66 @@ function parseBbsReply(line) {
   };
 }
 
-function activateShell(username) {
-  currentUser = username;
+function activateShell(account, nickname, resumed = false) {
+  currentAccount = account;
+  currentNickname = nickname || account;
   $("loginShell").classList.add("hidden");
   $("appShell").classList.remove("hidden");
-  $("sessionText").textContent = `已登录：${username}`;
-  showStatus(`已登录：${username}`);
-  send("WHO").catch(reportError);
-  send("HISTORY").catch(reportError);
-  setTimeout(() => send("BBS_LIST").catch(reportError), 180);
+  $("sessionText").textContent = `${currentNickname} (${currentAccount})`;
+  showStatus(resumed ? `已恢复登录：${currentNickname}` : `已登录：${currentNickname}`);
+  refreshAll();
+}
+
+function resetAppState() {
+  currentMode = "none";
+  currentTarget = "";
+  currentTitle = "";
+  currentGroupId = "";
+  currentPostId = 0;
+  activeConversationKey = "";
+  loadingConversationKey = "";
+  conversations = {};
+  friends = [];
+  requests = [];
+  sentRequests = [];
+  groups = [];
+  postRows = [];
+  detailRows = [];
+  selectedPostAttachment = null;
+  selectedReplyAttachment = null;
+  pendingPostAttachment = null;
+  pendingReplyAttachment = null;
+  document.querySelectorAll("input, textarea").forEach((field) => {
+    if (field.type === "file") {
+      field.value = "";
+    } else if (!field.disabled) {
+      field.value = "";
+    }
+  });
+  $("searchResult").innerHTML = "";
+  $("requestList").innerHTML = "";
+  $("friendList").innerHTML = "";
+  $("groupFriendChecks").innerHTML = "";
+  $("groupList").innerHTML = "";
+  $("postList").innerHTML = "";
+  $("postDetail").innerHTML = `<div class="empty">选择帖子查看详情。</div>`;
+  $("chatFeed").innerHTML = `<div class="empty">暂无消息。</div>`;
+  $("conversationTitle").textContent = "选择会话";
+  $("conversationHint").textContent = "可从搜索结果、私信请求、好友或群列表进入会话。";
+}
+
+function resetToLogin(text) {
+  currentAccount = "";
+  currentNickname = "";
+  session = "";
+  cursor = 0;
+  localStorage.removeItem(SESSION_KEY);
+  resetAppState();
+  $("loginForm").reset();
+  $("registerForm").reset();
+  $("appShell").classList.add("hidden");
+  $("loginShell").classList.remove("hidden");
+  setLoginStatus(text);
 }
 
 function reportError(error) {
@@ -114,54 +212,189 @@ function reportError(error) {
   log(text, "error");
 }
 
-function appendChat(kind, title, message, time = "") {
-  const empty = $("chatFeed").querySelector(".empty");
-  if (empty) empty.remove();
-  const div = document.createElement("div");
-  div.className = `bubble ${kind}`;
-  div.innerHTML = `<span class="tag">${title}</span>${time ? `<span class="time"> ${time}</span>` : ""}<br>${message}`;
-  $("chatFeed").appendChild(div);
-  $("chatFeed").scrollTop = $("chatFeed").scrollHeight;
+function conversationKey(type, id) {
+  return `${type}:${id}`;
 }
 
-function updateOnlineUsers(line) {
-  const parts = line.split(" ");
-  const users = parts.slice(2);
-  $("onlineList").innerHTML = "";
-  users.forEach((user) => {
+function ensureConversation(key, title = "", hint = "") {
+  if (!conversations[key]) {
+    conversations[key] = { title, hint, messages: [], loaded: false };
+  }
+  if (title) conversations[key].title = title;
+  if (hint) conversations[key].hint = hint;
+  return conversations[key];
+}
+
+function messageId(item) {
+  return `${item.sender}|${item.text}|${item.kind.replace(/^history\s+/, "")}`;
+}
+
+function addConversationMessage(key, item) {
+  const box = ensureConversation(key);
+  const id = messageId(item);
+  if (box.messages.some((message) => messageId(message) === id)) {
+    return;
+  }
+  box.messages.push(item);
+  if (box.messages.length > 300) {
+    box.messages.splice(0, box.messages.length - 300);
+  }
+  if (activeConversationKey === key) {
+    renderActiveConversation();
+  }
+}
+
+function renderActiveConversation() {
+  const feed = $("chatFeed");
+  const box = activeConversationKey ? ensureConversation(activeConversationKey) : null;
+  feed.innerHTML = "";
+  if (!box || box.messages.length === 0) {
+    feed.innerHTML = `<div class="empty">${box && !box.loaded ? "正在加载会话..." : "暂无消息。"}</div>`;
+    return;
+  }
+  box.messages.forEach((item) => {
     const div = document.createElement("div");
-    div.className = "user-pill";
-    div.textContent = user === currentUser ? `${user}  我` : user;
-    div.addEventListener("dblclick", () => {
-      if (user === currentUser) {
-        showStatus("不能私聊自己。", false);
-        return;
-      }
-      $("privateTarget").value = user;
-      showStatus(`私聊对象已设为：${user}`);
-    });
-    $("onlineList").appendChild(div);
+    div.className = `bubble ${item.kind}${item.mine ? " me" : ""}`;
+    div.innerHTML = `<span class="tag">${item.title}</span>${item.time ? `<span class="time"> ${item.time}</span>` : ""}<br>${item.text}`;
+    feed.appendChild(div);
+  });
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function selectPrivate(account, nickname, mode = "start") {
+  currentMode = mode === "reply" ? "private-reply" : "private";
+  currentTarget = account;
+  currentTitle = nickname || account;
+  currentGroupId = "";
+  activeConversationKey = conversationKey("private", account);
+  ensureConversation(
+    activeConversationKey,
+    `私聊：${currentTitle}`,
+    currentMode === "private-reply"
+      ? "回复后双方会自动成为好友，之后可以继续私聊。"
+      : "非好友可先发送一条私信，对方回复后成为好友。"
+  );
+  $("conversationTitle").textContent = `私聊：${currentTitle}`;
+  $("conversationHint").textContent =
+    currentMode === "private-reply"
+      ? "回复后双方会自动成为好友，之后可以继续私聊。"
+      : "非好友可先发送一条私信，对方回复后成为好友。";
+  renderActiveConversation();
+  loadingConversationKey = activeConversationKey;
+  send(`HISTORY_PRIVATE ${account}`).catch(reportError);
+  $("messageInput").focus();
+}
+
+function selectGroup(id, name) {
+  currentMode = "group";
+  currentGroupId = id;
+  currentTarget = "";
+  currentTitle = name;
+  activeConversationKey = conversationKey("group", id);
+  ensureConversation(activeConversationKey, `群聊：${name}`, `群 ID：${id}`);
+  $("conversationTitle").textContent = `群聊：${name}`;
+  $("conversationHint").textContent = `群 ID：${id}`;
+  renderActiveConversation();
+  loadingConversationKey = activeConversationKey;
+  send(`HISTORY_GROUP ${id}`).catch(reportError);
+  $("messageInput").focus();
+}
+
+function personButton(person, actionText, onClick) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "person-row";
+  button.innerHTML = `<strong>${person.nickname}</strong><span>${person.account}</span><span>${actionText}</span>`;
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+function nicknameFor(account) {
+  if (account === currentAccount) return currentNickname || "我";
+  const user = [...friends, ...requests, ...sentRequests].find((item) => item.account === account);
+  return user ? user.nickname : account;
+}
+
+function renderFriends() {
+  $("friendList").innerHTML = "";
+  $("groupFriendChecks").innerHTML = "";
+  if (friends.length === 0) {
+    $("friendList").innerHTML = `<div class="empty">暂无好友。</div>`;
+    $("groupFriendChecks").innerHTML = `<div class="empty">先通过私聊互相回复成为好友。</div>`;
+    return;
+  }
+  friends.forEach((friend) => {
+    $("friendList").appendChild(personButton(friend, "点击进入私聊", () => selectPrivate(friend.account, friend.nickname)));
+
+    const label = document.createElement("label");
+    label.innerHTML = `<input type="checkbox" value="${friend.account}"><span>${friend.nickname}</span>`;
+    $("groupFriendChecks").appendChild(label);
   });
 }
 
-function renderPostCard(post) {
-  const card = document.createElement("button");
-  card.className = "post-card";
-  card.type = "button";
-  card.dataset.id = String(post.id);
-  const title = post.title.length > 22 ? `${post.title.slice(0, 22)}...` : post.title;
-  const body = post.content.length > 38 ? `${post.content.slice(0, 38)}...` : post.content;
-  const time = post.time.length > 16 ? post.time.slice(0, 16) : post.time;
-  const attachment = post.attachment && post.attachment !== "none" ? " · 附件" : "";
-  card.innerHTML = `<strong>${title}</strong><span>${body}</span><small>#${post.id} · ${post.author} · ${time}${attachment}</small>`;
-  card.addEventListener("click", () => viewPost(post.id));
-  return card;
+function renderSentRequests() {
+  let section = $("sentRequestList");
+  if (!section) {
+    section = document.createElement("div");
+    section.id = "sentRequestList";
+    section.className = "list-stack";
+    $("searchResult").after(section);
+  }
+  section.innerHTML = "";
+  if (sentRequests.length === 0) {
+    return;
+  }
+  const title = document.createElement("h4");
+  title.textContent = "等待回复";
+  section.appendChild(title);
+  sentRequests.forEach((request) => {
+    const key = conversationKey("private", request.account);
+    const box = ensureConversation(key, `私聊：${request.nickname}`, "已发送首条消息，等待对方回复。");
+    if (!box.messages.some((message) => message.sender === currentAccount && message.text === request.message)) {
+      box.messages.push({
+        kind: "private",
+        title: "我",
+        sender: currentAccount,
+        text: request.message,
+        time: "",
+        mine: true,
+      });
+      box.loaded = true;
+    }
+    section.appendChild(
+      personButton(request, `等待回复：${request.message}`, () => selectPrivate(request.account, request.nickname))
+    );
+  });
 }
 
-let collectingPosts = false;
-let postRows = [];
-let collectingDetail = false;
-let detailRows = [];
+function renderRequests() {
+  $("requestList").innerHTML = "";
+  if (requests.length === 0) {
+    $("requestList").innerHTML = `<div class="empty">暂无私信请求。</div>`;
+    return;
+  }
+  requests.forEach((request) => {
+    $("requestList").appendChild(
+      personButton(request, `新消息：${request.message}`, () => selectPrivate(request.account, request.nickname, "reply"))
+    );
+  });
+}
+
+function renderGroups() {
+  $("groupList").innerHTML = "";
+  if (groups.length === 0) {
+    $("groupList").innerHTML = `<div class="empty">暂无群聊。</div>`;
+    return;
+  }
+  groups.forEach((group) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "group-row";
+    button.innerHTML = `<strong>${group.name}</strong><span>ID ${group.id}</span><span>点击进入群聊</span>`;
+    button.addEventListener("click", () => selectGroup(group.id, group.name));
+    $("groupList").appendChild(button);
+  });
+}
 
 function renderPosts() {
   $("postList").innerHTML = "";
@@ -169,7 +402,22 @@ function renderPosts() {
     $("postList").innerHTML = `<div class="empty">暂无帖子。</div>`;
     return;
   }
-  postRows.map(parseBbsPost).forEach((post) => $("postList").appendChild(renderPostCard(post)));
+  postRows.map(parseBbsPost).forEach((post) => {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "post-card";
+    card.dataset.id = String(post.id);
+    const title = post.title.length > 24 ? `${post.title.slice(0, 24)}...` : post.title;
+    const body = post.content.length > 42 ? `${post.content.slice(0, 42)}...` : post.content;
+    const file = post.attachment && post.attachment !== "none" ? " · 附件" : "";
+    card.innerHTML = `<strong>${title}</strong><span>${body}</span><small>#${post.id} · ${post.author}${file}</small>`;
+    card.addEventListener("click", () => viewPost(post.id));
+    $("postList").appendChild(card);
+  });
+}
+
+function authorLink(name) {
+  return `<button class="text-btn author-link" data-author="${name}">${name}</button>`;
 }
 
 function renderDetail() {
@@ -186,21 +434,25 @@ function renderDetail() {
   });
   const postBlock = document.createElement("div");
   postBlock.className = "bubble";
-  const postLink = post.attachment !== "none" ? `<br><a href="#" data-download-post="${post.id}">下载帖子附件：${post.attachment}</a>` : "";
-  postBlock.innerHTML = `<b>#${post.id} ${post.title}</b><span class="time"> ${post.author} · ${post.time}</span><br>${post.content}${postLink}`;
+  const postLink =
+    post.attachment !== "none"
+      ? `<br><a href="#" data-download-post="${post.id}">下载帖子附件：${post.attachment}</a>`
+      : "";
+  postBlock.innerHTML = `<b>#${post.id} ${post.title}</b><span class="time"> ${authorLink(post.author)} · ${post.time}</span><br>${post.content}${postLink}`;
   $("postDetail").appendChild(postBlock);
+
   const replies = detailRows.filter((line) => line.startsWith("BBS_REPLY ")).map(parseBbsReply);
   if (replies.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "暂无回复。";
-    $("postDetail").appendChild(empty);
+    $("postDetail").insertAdjacentHTML("beforeend", `<div class="empty">暂无回复。</div>`);
   } else {
     replies.forEach((reply) => {
       const div = document.createElement("div");
       div.className = "bubble history";
-      const link = reply.attachment !== "none" ? `<br><a href="#" data-download-reply="${reply.id}">下载回复附件：${reply.attachment}</a>` : "";
-      div.innerHTML = `<b>回复 #${reply.id}</b><span class="time"> ${reply.author} · ${reply.time}</span><br>${reply.content}${link}`;
+      const link =
+        reply.attachment !== "none"
+          ? `<br><a href="#" data-download-reply="${reply.id}">下载回复附件：${reply.attachment}</a>`
+          : "";
+      div.innerHTML = `<b>回复 #${reply.id}</b><span class="time"> ${authorLink(reply.author)} · ${reply.time}</span><br>${reply.content}${link}`;
       $("postDetail").appendChild(div);
     });
   }
@@ -214,6 +466,17 @@ function renderDetail() {
     link.addEventListener("click", (event) => {
       event.preventDefault();
       send(`BBS_DOWNLOAD_REPLY ${event.currentTarget.dataset.downloadReply}`).catch(reportError);
+    });
+  });
+  $("postDetail").querySelectorAll("[data-author]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const nickname = button.dataset.author;
+      if (nickname === currentNickname) {
+        showStatus("不能给自己发私信。", false);
+        return;
+      }
+      send(`SEARCH_USER ${nickname}`).catch(reportError);
+      switchPage("chatPage");
     });
   });
 }
@@ -236,9 +499,7 @@ async function maybeUploadPendingAttachment(line) {
   if (postMatch) {
     const file = pendingPostAttachment;
     pendingPostAttachment = null;
-    if (file) {
-      await upload(`BBS_UPLOAD_POST ${postMatch[1]} ${clean(file.name)} ${file.size}`, file);
-    }
+    if (file) await upload(`BBS_UPLOAD_POST ${postMatch[1]} ${clean(file.name)} ${file.size}`, file);
     await send("BBS_LIST");
     return;
   }
@@ -246,9 +507,7 @@ async function maybeUploadPendingAttachment(line) {
   if (replyMatch) {
     const file = pendingReplyAttachment;
     pendingReplyAttachment = null;
-    if (file) {
-      await upload(`BBS_UPLOAD_REPLY ${replyMatch[1]} ${clean(file.name)} ${file.size}`, file);
-    }
+    if (file) await upload(`BBS_UPLOAD_REPLY ${replyMatch[1]} ${clean(file.name)} ${file.size}`, file);
     if (currentPostId > 0) await send(`BBS_VIEW ${currentPostId}`);
   }
 }
@@ -256,11 +515,17 @@ async function maybeUploadPendingAttachment(line) {
 function handleLine(line) {
   log(`< ${line}`);
   if (line.startsWith("OK logged in ")) {
-    activateShell(line.replace("OK logged in ", "").trim());
+    const identity = parseIdentity(line.replace("OK logged in ", "").trim());
+    activateShell(identity.account, identity.nickname);
+    return;
+  }
+  if (line === "OK logged out") {
+    resetToLogin("已退出登录。");
     return;
   }
   if (line === "OK registered") {
     setLoginStatus("注册成功，现在可以登录。");
+    showAuth("login");
   }
   if (line.startsWith("ERR ")) {
     showStatus(line, false);
@@ -268,23 +533,185 @@ function handleLine(line) {
   } else if (line.startsWith("OK ")) {
     showStatus(line);
   }
-  if (line.startsWith("ONLINE ")) updateOnlineUsers(line);
-  if (line.startsWith("MSG ")) {
-    const [, sender, ...message] = line.split(" ");
-    appendChat("group", `【群聊】${sender}`, message.join(" "), new Date().toLocaleTimeString());
+  if (line === "OK private message sent" || line === "OK private request sent") {
+    send("FRIENDS").catch(reportError);
+    send("REQUESTS").catch(reportError);
+    send("SENT_REQUESTS").catch(reportError);
   }
+
+  if (line === "FRIENDS_BEGIN") {
+    collectingFriends = true;
+    friends = [];
+    return;
+  }
+  if (line === "FRIENDS_END") {
+    collectingFriends = false;
+    renderFriends();
+    return;
+  }
+  if (collectingFriends && line.startsWith("FRIEND ")) {
+    friends.push(parseIdentity(line.replace("FRIEND ", "")));
+    return;
+  }
+
+  if (line === "REQUESTS_BEGIN") {
+    collectingRequests = true;
+    requests = [];
+    return;
+  }
+  if (line === "REQUESTS_END") {
+    collectingRequests = false;
+    renderRequests();
+    return;
+  }
+  if (collectingRequests && line.startsWith("REQUEST ")) {
+    const [account, nickname, ...message] = line.replace("REQUEST ", "").split("|");
+    requests.push({ account, nickname: nickname || account, message: message.join("|") });
+    return;
+  }
+
+  if (line === "SENT_REQUESTS_BEGIN") {
+    collectingSentRequests = true;
+    sentRequests = [];
+    return;
+  }
+  if (line === "SENT_REQUESTS_END") {
+    collectingSentRequests = false;
+    renderSentRequests();
+    return;
+  }
+  if (collectingSentRequests && line.startsWith("SENT_REQUEST ")) {
+    const [account, nickname, ...message] = line.replace("SENT_REQUEST ", "").split("|");
+    sentRequests.push({ account, nickname: nickname || account, message: message.join("|") });
+    return;
+  }
+
+  if (line === "GROUPS_BEGIN") {
+    collectingGroups = true;
+    groups = [];
+    return;
+  }
+  if (line === "GROUPS_END") {
+    collectingGroups = false;
+    renderGroups();
+    return;
+  }
+  if (collectingGroups && line.startsWith("GROUP_ITEM ")) {
+    const [id, owner, name] = line.replace("GROUP_ITEM ", "").split("|");
+    groups.push({ id, owner, name });
+    return;
+  }
+
+  if (line.startsWith("USER ")) {
+    const identity = parseIdentity(line.replace("USER ", ""));
+    $("searchResult").innerHTML = "";
+    $("searchResult").appendChild(
+      personButton(identity, "点击发起私信", () => selectPrivate(identity.account, identity.nickname))
+    );
+    return;
+  }
+
+  if (line === "PRIVATE_HISTORY_BEGIN") {
+    collectingPrivateHistory = true;
+    const box = ensureConversation(loadingConversationKey || activeConversationKey);
+    box.messages = [];
+    box.loaded = false;
+    renderActiveConversation();
+    return;
+  }
+  if (line === "PRIVATE_HISTORY_END") {
+    collectingPrivateHistory = false;
+    const box = ensureConversation(loadingConversationKey || activeConversationKey);
+    box.loaded = true;
+    renderActiveConversation();
+    return;
+  }
+  if (line === "GROUP_HISTORY_BEGIN") {
+    collectingGroupHistory = true;
+    const box = ensureConversation(loadingConversationKey || activeConversationKey);
+    box.messages = [];
+    box.loaded = false;
+    renderActiveConversation();
+    return;
+  }
+  if (line === "GROUP_HISTORY_END") {
+    collectingGroupHistory = false;
+    const box = ensureConversation(loadingConversationKey || activeConversationKey);
+    box.loaded = true;
+    renderActiveConversation();
+    return;
+  }
+
   if (line.startsWith("PMSG ")) {
     const [, sender, ...message] = line.split(" ");
-    appendChat("private", `【私聊】${sender} -> 我`, message.join(" "), new Date().toLocaleTimeString());
+    const key = conversationKey("private", sender);
+    const mine = sender === currentAccount;
+    addConversationMessage(key, {
+      kind: "private",
+      title: mine ? "我" : nicknameFor(sender),
+      sender,
+      text: message.join(" "),
+      time: new Date().toLocaleTimeString(),
+      mine,
+    });
+    send("REQUESTS").catch(reportError);
+    send("SENT_REQUESTS").catch(reportError);
+    send("FRIENDS").catch(reportError);
+  }
+  if (line.startsWith("GMSG ")) {
+    const [, groupId, sender, ...message] = line.split(" ");
+    const key = conversationKey("group", groupId);
+    const mine = sender === currentAccount;
+    addConversationMessage(key, {
+      kind: "group",
+      title: mine ? "我" : nicknameFor(sender),
+      sender,
+      text: message.join(" "),
+      time: new Date().toLocaleTimeString(),
+      mine,
+    });
   }
   if (line.startsWith("HMSG ")) {
     const data = line.replace(/^HMSG /, "").split("|");
-    appendChat("history", `【历史群聊】${data[1]}`, data.slice(2).join("|"), data[0]);
+    const groupText = data[1] || "group-0";
+    const groupId = groupText.replace(/^group-/, "");
+    addConversationMessage(conversationKey("group", groupId), {
+      kind: "history group",
+      title: data[2] === currentAccount ? "我" : nicknameFor(data[2] || ""),
+      sender: data[2] || "",
+      text: data.slice(3).join("|"),
+      time: data[0],
+      mine: data[2] === currentAccount,
+    });
   }
   if (line.startsWith("HPMSG ")) {
     const data = line.replace(/^HPMSG /, "").split("|");
-    appendChat("history private", `【历史私聊】${data[1]} -> ${data[2]}`, data.slice(3).join("|"), data[0]);
+    const peer = data[1] === currentAccount ? data[2] : data[1];
+    const key = collectingPrivateHistory ? loadingConversationKey : conversationKey("private", peer);
+    const mine = data[1] === currentAccount;
+    addConversationMessage(key, {
+      kind: "history private",
+      title: mine ? "我" : nicknameFor(data[1]),
+      sender: data[1],
+      text: data.slice(3).join("|"),
+      time: data[0],
+      mine,
+    });
   }
+  if (line.startsWith("HGMSG ")) {
+    const data = line.replace(/^HGMSG /, "").split("|");
+    const key = collectingGroupHistory ? loadingConversationKey : conversationKey("group", data[1]);
+    const mine = data[2] === currentAccount;
+    addConversationMessage(key, {
+      kind: "history group",
+      title: mine ? "我" : nicknameFor(data[2]),
+      sender: data[2],
+      text: data.slice(3).join("|"),
+      time: data[0],
+      mine,
+    });
+  }
+
   if (line === "BBS_POSTS_BEGIN") {
     collectingPosts = true;
     postRows = [];
@@ -307,7 +734,6 @@ function handleLine(line) {
   if (line === "BBS_POST_END") {
     collectingDetail = false;
     renderDetail();
-    enableDetailPane();
     return;
   }
   if (collectingDetail && (line.startsWith("BBS_POST ") || line.startsWith("BBS_REPLY "))) {
@@ -334,97 +760,169 @@ async function poll() {
   }
 }
 
+function showAuth(which) {
+  $("loginForm").classList.toggle("active", which === "login");
+  $("registerForm").classList.toggle("active", which === "register");
+}
+
 function switchPage(pageId) {
   document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.page === pageId));
   document.querySelectorAll(".page").forEach((page) => page.classList.toggle("active", page.id === pageId));
-}
-
-function switchWorkPane(paneId) {
-  document.querySelectorAll(".work-tab").forEach((tab) => tab.classList.toggle("active", tab.dataset.work === paneId));
-  document.querySelectorAll(".work-pane").forEach((pane) => pane.classList.toggle("active", pane.id === paneId));
-}
-
-function enableDetailPane() {
-  $("detailTab").disabled = false;
-  switchWorkPane("detailPane");
-}
-
-function viewPost(id) {
-  send(`BBS_VIEW ${id}`).catch(reportError);
 }
 
 function selectedFile(inputId) {
   return $(inputId).files && $(inputId).files[0] ? $(inputId).files[0] : null;
 }
 
-$("connectBtn").addEventListener("click", () => ensureSession().catch(reportError));
+function refreshAll() {
+  send("FRIENDS").catch(reportError);
+  send("REQUESTS").catch(reportError);
+  send("SENT_REQUESTS").catch(reportError);
+  send("GROUPS").catch(reportError);
+  setTimeout(() => send("BBS_LIST").catch(reportError), 150);
+}
 
-$("registerBtn").addEventListener("click", async () => {
-  const data = new FormData($("loginForm"));
-  const username = clean(data.get("username"));
+$("showRegisterBtn").addEventListener("click", () => showAuth("register"));
+$("showLoginBtn").addEventListener("click", () => showAuth("login"));
+
+$("registerForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const data = new FormData(event.currentTarget);
+  const account = clean(data.get("account"));
+  const nickname = clean(data.get("nickname"));
   const password = clean(data.get("password"));
-  if (!username || !password) {
-    setLoginStatus("请填写用户名和密码。");
+  if (!/^\d{9}$/.test(account)) {
+    setLoginStatus("账号必须是9位数字。");
+    return;
+  }
+  if (!/^(?=.*[A-Za-z])(?=.*\d).{7,}$/.test(password)) {
+    setLoginStatus("密码必须同时包含数字和字母，并且长度大于6位。");
     return;
   }
   setLoginStatus("正在注册...");
-  await send(`REGISTER ${username} ${password}`).catch(reportError);
+  await resetBackendSession(true);
+  await ensureSession();
+  await send(`REGISTER ${account} ${password} ${nickname}`).catch(reportError);
 });
 
 $("loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const data = new FormData(event.currentTarget);
-  const username = clean(data.get("username"));
+  const login = clean(data.get("login"));
   const password = clean(data.get("password"));
-  if (!username || !password) {
-    setLoginStatus("请填写用户名和密码。");
+  if (!login || !password) {
+    setLoginStatus("请填写账号或昵称和密码。");
     return;
   }
   setLoginStatus("正在登录...");
-  await send(`LOGIN ${username} ${password}`).catch(reportError);
+  await resetBackendSession(true);
+  await ensureSession();
+  await send(`LOGIN ${login} ${password}`).catch(reportError);
+});
+
+$("logoutBtn").addEventListener("click", async () => {
+  try {
+    if (session) await send("LOGOUT");
+    if (session) await api("/api/close", { session, logout: false });
+  } catch (error) {
+    reportError(error);
+  } finally {
+    resetToLogin("已退出登录。");
+  }
 });
 
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => switchPage(tab.dataset.page));
 });
 
-document.querySelectorAll(".work-tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    if (!tab.disabled) switchWorkPane(tab.dataset.work);
-  });
+$("refreshSocialBtn").addEventListener("click", () => {
+  send("FRIENDS").catch(reportError);
+  send("REQUESTS").catch(reportError);
+  send("SENT_REQUESTS").catch(reportError);
 });
-
-$("refreshUsersBtn").addEventListener("click", () => send("WHO").catch(reportError));
-$("historyBtn").addEventListener("click", () => send("HISTORY").catch(reportError));
+$("refreshGroupsBtn").addEventListener("click", () => send("GROUPS").catch(reportError));
+$("historyBtn").addEventListener("click", () => {
+  if (currentMode === "private" || currentMode === "private-reply") {
+    loadingConversationKey = activeConversationKey;
+    send(`HISTORY_PRIVATE ${currentTarget}`).catch(reportError);
+  } else if (currentMode === "group") {
+    loadingConversationKey = activeConversationKey;
+    send(`HISTORY_GROUP ${currentGroupId}`).catch(reportError);
+  } else {
+    showStatus("请先选择一个会话。", false);
+  }
+});
 $("refreshPostsBtn").addEventListener("click", () => send("BBS_LIST").catch(reportError));
 
-$("groupMessage").addEventListener("keydown", (event) => {
+$("searchUserBtn").addEventListener("click", () => {
+  const login = clean($("userSearch").value);
+  if (login) send(`SEARCH_USER ${login}`).catch(reportError);
+});
+
+$("sendMessageBtn").addEventListener("click", () => {
+  const message = clean($("messageInput").value);
+  if (!message) return;
+  $("messageInput").value = "";
+  if (currentMode === "private") {
+    addConversationMessage(activeConversationKey, {
+      kind: "private",
+      title: "我",
+      sender: currentAccount,
+      text: message,
+      time: new Date().toLocaleTimeString(),
+      mine: true,
+    });
+    if (!friends.some((friend) => friend.account === currentTarget) &&
+        !sentRequests.some((request) => request.account === currentTarget)) {
+      sentRequests.push({
+        account: currentTarget,
+        nickname: currentTitle,
+        message,
+      });
+      renderSentRequests();
+    }
+    send(`PRIVATE_START ${currentTarget} ${message}`).catch(reportError);
+  } else if (currentMode === "private-reply") {
+    addConversationMessage(activeConversationKey, {
+      kind: "private",
+      title: "我",
+      sender: currentAccount,
+      text: message,
+      time: new Date().toLocaleTimeString(),
+      mine: true,
+    });
+    send(`PRIVATE_REPLY ${currentTarget} ${message}`).catch(reportError);
+  } else if (currentMode === "group") {
+    addConversationMessage(activeConversationKey, {
+      kind: "group",
+      title: "我",
+      sender: currentAccount,
+      text: message,
+      time: new Date().toLocaleTimeString(),
+      mine: true,
+    });
+    send(`GROUP_SEND ${currentGroupId} ${message}`).catch(reportError);
+  } else {
+    showStatus("请先选择私聊或群聊。", false);
+  }
+});
+
+$("messageInput").addEventListener("keydown", (event) => {
   if (event.key === "Enter") {
     event.preventDefault();
-    $("sendGroupBtn").click();
+    $("sendMessageBtn").click();
   }
 });
 
-$("sendGroupBtn").addEventListener("click", () => {
-  const message = clean($("groupMessage").value);
-  if (!message) return;
-  $("groupMessage").value = "";
-  send(`GROUP ${message}`).catch(reportError);
-});
-
-$("sendPrivateBtn").addEventListener("click", () => {
-  const target = clean($("privateTarget").value);
-  const message = clean($("groupMessage").value);
-  if (!target) {
-    showStatus("请先填写私聊对象，或双击右侧在线用户。", false);
+$("createGroupBtn").addEventListener("click", () => {
+  const name = clean($("groupName").value);
+  const members = Array.from($("groupFriendChecks").querySelectorAll("input:checked")).map((input) => input.value);
+  if (!name || members.length === 0) {
+    showStatus("请填写群名并至少选择一位好友。", false);
     return;
   }
-  if (!message) {
-    showStatus("请输入要发送的消息内容。", false);
-    return;
-  }
-  $("groupMessage").value = "";
-  send(`PRIVATE ${target} ${message}`).catch(reportError);
+  $("groupName").value = "";
+  send(`GROUP_CREATE ${name} ${members.join(",")}`).catch(reportError);
 });
 
 $("postAttachment").addEventListener("change", () => {
@@ -467,7 +965,7 @@ $("createPostBtn").addEventListener("click", async () => {
 
 $("replyBtn").addEventListener("click", async () => {
   if (currentPostId <= 0) {
-    showStatus("请先在左侧选择一个帖子。", false);
+    showStatus("请先选择一个帖子。", false);
     return;
   }
   const content = clean($("replyContent").value);
@@ -483,11 +981,15 @@ $("replyBtn").addEventListener("click", async () => {
   await send(`BBS_REPLY ${currentPostId}|${content}`).catch(reportError);
 });
 
+function viewPost(id) {
+  send(`BBS_VIEW ${id}`).catch(reportError);
+}
+
 $("chatUploadBtn").addEventListener("click", async () => {
   const target = clean($("chatFileTarget").value);
   const file = selectedFile("chatFile");
   if (!target || !file) {
-    showStatus("请填写接收用户并选择文件。", false);
+    showStatus("请填写接收方并选择文件。", false);
     return;
   }
   await upload(`UPLOAD ${target} ${clean(file.name)} ${file.size}`, file).catch(reportError);

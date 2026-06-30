@@ -100,20 +100,34 @@ def main():
         replies_file = os.path.join(data_dir, "replies.db")
         files_file = os.path.join(data_dir, "files.db")
         chat_log = os.path.join(logs_dir, "chat.log")
-        for path in [users_file, posts_file, replies_file, files_file, chat_log]:
+        friends_file = os.path.join(data_dir, "friends.db")
+        private_requests_file = os.path.join(data_dir, "private_requests.db")
+        groups_file = os.path.join(data_dir, "groups.db")
+        group_members_file = os.path.join(data_dir, "group_members.db")
+        for path in [
+            users_file,
+            posts_file,
+            replies_file,
+            files_file,
+            chat_log,
+            friends_file,
+            private_requests_file,
+            groups_file,
+            group_members_file,
+        ]:
             assert os.path.isfile(path), path
 
-        send_line(alice, "REGISTER alice storagepass")
+        send_line(alice, "REGISTER 100000001 Storage123 alpha")
         assert receive_line(alice) == "OK registered"
-        send_line(alice, "LOGIN alice storagepass")
-        assert receive_line(alice) == "OK logged in alice"
-        send_line(bob, "REGISTER bob storagepass")
+        send_line(alice, "LOGIN alpha Storage123")
+        assert receive_line(alice) == "OK logged in 100000001|alpha"
+        send_line(bob, "REGISTER 100000002 Storage456 beta")
         assert receive_line(bob) == "OK registered"
-        send_line(bob, "LOGIN bob storagepass")
-        assert receive_line(bob) == "OK logged in bob"
+        send_line(bob, "LOGIN beta Storage456")
+        assert receive_line(bob) == "OK logged in 100000002|beta"
 
-        assert_file_contains(users_file, "alice:")
-        assert_file_contains(users_file, "bob:")
+        assert_file_contains(users_file, "100000001|Storage123|alpha")
+        assert_file_contains(users_file, "100000002|Storage456|beta")
 
         send_line(alice, "POST first_title first post content")
         assert receive_line(alice) == "OK post 1 created"
@@ -122,30 +136,30 @@ def main():
 
         send_line(alice, "LISTPOST")
         assert receive_line(alice) == "OK posts"
-        assert receive_line(alice) == "1 | alice | first_title"
+        assert receive_line(alice) == "1 | alpha | first_title"
         assert receive_line(alice) == "OK total 1"
 
         send_line(alice, "VIEWPOST 1")
-        assert receive_line(alice) == "POST 1 alice first_title"
+        assert receive_line(alice) == "POST 1 alpha first_title"
         assert receive_line(alice) == "first post content"
-        assert receive_line(alice) == "1 | bob | reply content from bob"
+        assert receive_line(alice) == "1 | beta | reply content from bob"
         assert receive_line(alice) == "OK replies 1"
 
-        assert_file_contains(posts_file, "1|alice|first_title|first%20post%20content|")
-        assert_file_contains(replies_file, "1|1|bob|reply%20content%20from%20bob|")
+        assert_file_contains(posts_file, "1|alpha|first_title|first%20post%20content|")
+        assert_file_contains(replies_file, "1|1|beta|reply%20content%20from%20bob|")
 
         payload = b"storage file payload\n"
-        send_line(alice, f"UPLOAD bob sample.txt {len(payload)}")
+        send_line(alice, f"UPLOAD beta sample.txt {len(payload)}")
         alice.sendall(payload)
-        assert receive_line(bob) == f"FILE_READY alice sample.txt {len(payload)}"
-        assert receive_line(alice) == "OK uploaded sample.txt for bob"
+        assert receive_line(bob) == f"FILE_READY 100000001 sample.txt {len(payload)}"
+        assert receive_line(alice) == "OK uploaded sample.txt for beta"
 
-        stored_upload = os.path.join(upload_dir, "bob__sample.txt")
+        stored_upload = os.path.join(upload_dir, "100000002__sample.txt")
         assert os.path.isfile(stored_upload), stored_upload
         with open(stored_upload, "rb") as handle:
             assert handle.read() == payload
-        assert_file_contains(files_file, "|bob|alice|bob|sample.txt|")
-        assert_file_contains(files_file, "%2Fuploads%2Fchat%2Fbob__sample.txt|")
+        assert_file_contains(files_file, "|100000002|100000001|100000002|sample.txt|")
+        assert_file_contains(files_file, "%2Fuploads%2Fchat%2F100000002__sample.txt|")
 
         send_line(bob, "DOWNLOAD sample.txt")
         assert receive_line(bob) == f"FILE sample.txt {len(payload)}"
@@ -161,8 +175,12 @@ def main():
             "data/posts.db",
             "data/replies.db",
             "data/files.db",
+            "data/friends.db",
+            "data/private_requests.db",
+            "data/groups.db",
+            "data/group_members.db",
             "logs/chat.log",
-            "uploads/bob__sample.txt",
+            "uploads/100000002__sample.txt",
         ]:
             assert os.path.exists(os.path.join(snapshot_dir, relative_path)), relative_path
 

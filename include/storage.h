@@ -18,6 +18,10 @@ const char *storage_posts_file(void);
 const char *storage_replies_file(void);
 const char *storage_file_index(void);
 const char *storage_chat_log_file(void);
+const char *storage_friends_file(void);
+const char *storage_private_requests_file(void);
+const char *storage_groups_file(void);
+const char *storage_group_members_file(void);
 
 int storage_ensure_directory(const char *path);
 int storage_init(void);

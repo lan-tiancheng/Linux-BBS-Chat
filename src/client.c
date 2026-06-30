@@ -177,10 +177,9 @@ int run_client(const char *host, int port)
             FILE *file;
 
             if (sscanf(line + 7, "%31s %767s %c", target, path, &extra) != 2 ||
-                !user_valid_username(target) ||
                 file_local_info(path, filename, sizeof(filename), &size) < 0) {
                 fprintf(stderr,
-                        "usage: UPLOAD <user> <path>; file names may use "
+                        "usage: UPLOAD <account-or-nickname> <path>; file names may use "
                         "letters, digits, dot, underscore, and hyphen\n> ");
                 fflush(stderr);
                 continue;

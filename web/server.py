@@ -20,6 +20,7 @@ WEB_HOST = os.environ.get("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.environ.get("WEB_PORT", "8080"))
 AUTO_START_BACKEND = os.environ.get("WEB_AUTO_START_BACKEND", "1") != "0"
 MAX_BODY = 20 * 1024 * 1024
+IDLE_TIMEOUT_SECONDS = 30 * 60
 
 
 class BackendSession:
@@ -28,9 +29,13 @@ class BackendSession:
         self.sock = socket.create_connection((BACKEND_HOST, BACKEND_PORT), timeout=5)
         self.sock.settimeout(0.2)
         self.lock = threading.Lock()
+        self.state_lock = threading.Lock()
         self.buffer = bytearray()
         self.events = []
         self.closed = False
+        self.last_activity = time.time()
+        self.current_account = ""
+        self.current_nickname = ""
         self.greeting = self._read_line_blocking(timeout=3)
         self.reader = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader.start()
@@ -70,9 +75,19 @@ class BackendSession:
         return bytes(data)
 
     def _append_event(self, event):
-        self.events.append(event)
-        if len(self.events) > 300:
-            del self.events[: len(self.events) - 300]
+        with self.state_lock:
+            line = event.get("line", "")
+            if line.startswith("OK logged in "):
+                identity = line.replace("OK logged in ", "", 1).strip()
+                account, _, nickname = identity.partition("|")
+                self.current_account = account
+                self.current_nickname = nickname or account
+            elif line == "OK logged out":
+                self.current_account = ""
+                self.current_nickname = ""
+            self.events.append(event)
+            if len(self.events) > 300:
+                del self.events[: len(self.events) - 300]
 
     def _reader_loop(self):
         while not self.closed:
@@ -117,12 +132,14 @@ class BackendSession:
             self._append_event({"type": "line", "line": line})
 
     def send_line(self, line):
+        self.touch()
         with self.lock:
             if self.closed:
                 raise ConnectionError("backend session is closed")
             self.sock.sendall(line.encode("utf-8") + b"\n")
 
     def send_upload(self, command, payload):
+        self.touch()
         with self.lock:
             if self.closed:
                 raise ConnectionError("backend session is closed")
@@ -132,8 +149,28 @@ class BackendSession:
         events = self.events[after:]
         return len(self.events), events
 
-    def close(self):
+    def touch(self):
+        with self.state_lock:
+            self.last_activity = time.time()
+
+    def snapshot(self):
+        with self.state_lock:
+            return {
+                "session": self.id,
+                "greeting": self.greeting,
+                "currentAccount": self.current_account,
+                "currentNickname": self.current_nickname,
+                "closed": self.closed,
+                "lastActivity": self.last_activity,
+            }
+
+    def close(self, logout=False):
         self.closed = True
+        if logout:
+            try:
+                self.sock.sendall(b"LOGOUT\n")
+            except OSError:
+                pass
         try:
             self.sock.close()
         except OSError:
@@ -198,6 +235,33 @@ def get_session(session_id):
     return session
 
 
+def get_existing_session(session_id):
+    if not session_id:
+        return None
+    with sessions_lock:
+        session = sessions.get(session_id)
+    if session is None or session.closed:
+        return None
+    return session
+
+
+def cleanup_idle_sessions():
+    while True:
+        time.sleep(30)
+        now = time.time()
+        expired = []
+        with sessions_lock:
+            for session_id, session in list(sessions.items()):
+                snapshot = session.snapshot()
+                if snapshot["closed"]:
+                    expired.append(session_id)
+                elif now - snapshot["lastActivity"] > IDLE_TIMEOUT_SECONDS:
+                    session.close(logout=True)
+                    expired.append(session_id)
+            for session_id in expired:
+                sessions.pop(session_id, None)
+
+
 class WebHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         return
@@ -232,10 +296,16 @@ class WebHandler(BaseHTTPRequestHandler):
             payload = read_json(self)
             path = urlparse(self.path).path
             if path == "/api/session":
-                session = BackendSession()
-                with sessions_lock:
-                    sessions[session.id] = session
-                json_response(self, 200, {"session": session.id, "greeting": session.greeting})
+                session = get_existing_session(payload.get("session", ""))
+                resumed = session is not None
+                if session is None:
+                    session = BackendSession()
+                    with sessions_lock:
+                        sessions[session.id] = session
+                session.touch()
+                result = session.snapshot()
+                result["resumed"] = resumed
+                json_response(self, 200, result)
                 return
             session = get_session(payload.get("session", ""))
             if path == "/api/command":
@@ -253,7 +323,9 @@ class WebHandler(BaseHTTPRequestHandler):
                 json_response(self, 200, {"cursor": next_cursor, "events": events})
                 return
             if path == "/api/close":
-                session.close()
+                session.close(logout=bool(payload.get("logout", False)))
+                with sessions_lock:
+                    sessions.pop(session.id, None)
                 json_response(self, 200, {"ok": True})
                 return
             self.send_error(404)
@@ -263,6 +335,7 @@ class WebHandler(BaseHTTPRequestHandler):
 
 def main():
     start_backend_if_needed()
+    threading.Thread(target=cleanup_idle_sessions, daemon=True).start()
     server = ThreadingHTTPServer((WEB_HOST, WEB_PORT), WebHandler)
     print(f"web frontend listening on http://{WEB_HOST}:{WEB_PORT}")
     try:

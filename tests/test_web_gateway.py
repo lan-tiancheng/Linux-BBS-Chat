@@ -118,10 +118,15 @@ def main():
         assert created["greeting"].startswith("OK connected"), created
         cursor = 0
 
-        command(web_port, session, "REGISTER alice pass")
+        command(web_port, session, "REGISTER 100000001 Webpass1 webalpha")
         cursor, _ = wait_for(web_port, session, cursor, line_is("OK registered"))
-        command(web_port, session, "LOGIN alice pass")
-        cursor, _ = wait_for(web_port, session, cursor, line_is("OK logged in alice"))
+        command(web_port, session, "LOGIN webalpha Webpass1")
+        cursor, _ = wait_for(web_port, session, cursor, line_is("OK logged in 100000001|webalpha"))
+
+        resumed = post(web_port, "/api/session", {"session": session})
+        assert resumed["resumed"] is True, resumed
+        assert resumed["currentAccount"] == "100000001", resumed
+        assert resumed["currentNickname"] == "webalpha", resumed
 
         command(web_port, session, "BBS_CREATE web title|web content")
         cursor, _ = wait_for(web_port, session, cursor, line_is("OK post 1 created"))
@@ -137,7 +142,7 @@ def main():
         lines = [event.get("line", "") for event in events]
         assert "BBS_POSTS_BEGIN" in lines, lines
         assert any(
-            line.startswith("BBS_POST 1|alice|web title|web content|web.txt|")
+            line.startswith("BBS_POST 1|webalpha|web title|web content|web.txt|")
             for line in lines
         ), lines
         assert "BBS_POSTS_END" in lines, lines

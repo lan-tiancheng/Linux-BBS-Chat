@@ -35,6 +35,10 @@ static char posts_file_path[PATH_MAX];
 static char replies_file_path[PATH_MAX];
 static char file_index_path[PATH_MAX];
 static char chat_log_path[PATH_MAX];
+static char friends_file_path[PATH_MAX];
+static char private_requests_file_path[PATH_MAX];
+static char groups_file_path[PATH_MAX];
+static char group_members_file_path[PATH_MAX];
 
 static const char *env_or_default(const char *name, const char *fallback)
 {
@@ -164,6 +168,10 @@ static void initialize_paths(void)
     const char *replies_file = getenv("BBS_REPLIES_FILE");
     const char *file_index = getenv("BBS_FILE_INDEX");
     const char *chat_log = getenv("BBS_CHAT_LOG");
+    const char *friends_file = getenv("BBS_FRIENDS_FILE");
+    const char *private_requests_file = getenv("BBS_PRIVATE_REQUESTS_FILE");
+    const char *groups_file = getenv("BBS_GROUPS_FILE");
+    const char *group_members_file = getenv("BBS_GROUP_MEMBERS_FILE");
 
     set_path(data_dir_path, sizeof(data_dir_path), data_dir);
     set_path(logs_dir_path, sizeof(logs_dir_path), logs_dir);
@@ -200,6 +208,33 @@ static void initialize_paths(void)
     } else {
         (void)path_join(chat_log_path, sizeof(chat_log_path), logs_dir_path,
                         "chat.log");
+    }
+    if (friends_file != NULL && *friends_file != '\0') {
+        set_path(friends_file_path, sizeof(friends_file_path), friends_file);
+    } else {
+        (void)path_join(friends_file_path, sizeof(friends_file_path),
+                        data_dir_path, "friends.db");
+    }
+    if (private_requests_file != NULL && *private_requests_file != '\0') {
+        set_path(private_requests_file_path,
+                 sizeof(private_requests_file_path), private_requests_file);
+    } else {
+        (void)path_join(private_requests_file_path,
+                        sizeof(private_requests_file_path), data_dir_path,
+                        "private_requests.db");
+    }
+    if (groups_file != NULL && *groups_file != '\0') {
+        set_path(groups_file_path, sizeof(groups_file_path), groups_file);
+    } else {
+        (void)path_join(groups_file_path, sizeof(groups_file_path),
+                        data_dir_path, "groups.db");
+    }
+    if (group_members_file != NULL && *group_members_file != '\0') {
+        set_path(group_members_file_path, sizeof(group_members_file_path),
+                 group_members_file);
+    } else {
+        (void)path_join(group_members_file_path, sizeof(group_members_file_path),
+                        data_dir_path, "group_members.db");
     }
 }
 
@@ -272,6 +307,30 @@ const char *storage_chat_log_file(void)
     return chat_log_path;
 }
 
+const char *storage_friends_file(void)
+{
+    pthread_once(&storage_once, initialize_paths);
+    return friends_file_path;
+}
+
+const char *storage_private_requests_file(void)
+{
+    pthread_once(&storage_once, initialize_paths);
+    return private_requests_file_path;
+}
+
+const char *storage_groups_file(void)
+{
+    pthread_once(&storage_once, initialize_paths);
+    return groups_file_path;
+}
+
+const char *storage_group_members_file(void)
+{
+    pthread_once(&storage_once, initialize_paths);
+    return group_members_file_path;
+}
+
 int storage_ensure_directory(const char *path)
 {
     return ensure_directory_chain(path);
@@ -289,7 +348,11 @@ int storage_init(void)
         ensure_parent_directory(storage_posts_file()) < 0 ||
         ensure_parent_directory(storage_replies_file()) < 0 ||
         ensure_parent_directory(storage_file_index()) < 0 ||
-        ensure_parent_directory(storage_chat_log_file()) < 0) {
+        ensure_parent_directory(storage_chat_log_file()) < 0 ||
+        ensure_parent_directory(storage_friends_file()) < 0 ||
+        ensure_parent_directory(storage_private_requests_file()) < 0 ||
+        ensure_parent_directory(storage_groups_file()) < 0 ||
+        ensure_parent_directory(storage_group_members_file()) < 0) {
         return -1;
     }
 
@@ -298,6 +361,10 @@ int storage_init(void)
     open_and_close(storage_replies_file());
     open_and_close(storage_file_index());
     open_and_close(storage_chat_log_file());
+    open_and_close(storage_friends_file());
+    open_and_close(storage_private_requests_file());
+    open_and_close(storage_groups_file());
+    open_and_close(storage_group_members_file());
     return 0;
 }
 
@@ -342,6 +409,20 @@ done:
         result = -1;
     }
     return result;
+}
+
+static int copy_if_readable(const char *source_path, const char *target_dir,
+                            const char *filename)
+{
+    char destination[PATH_MAX];
+
+    if (access(source_path, R_OK) != 0) {
+        return 0;
+    }
+    if (path_join(destination, sizeof(destination), target_dir, filename) < 0) {
+        return -1;
+    }
+    return storage_copy_file(source_path, destination);
 }
 
 static int copy_tree(const char *source_path, const char *destination_path);
@@ -454,50 +535,22 @@ int storage_backup_snapshot(const char *label, char *snapshot_path,
         return -1;
     }
 
-    if (access(storage_users_file(), R_OK) == 0) {
-        char destination[PATH_MAX];
-
-        if (path_join(destination, sizeof(destination), data_target,
-                      "users.db") < 0 ||
-            storage_copy_file(storage_users_file(), destination) < 0) {
-            return -1;
-        }
-    }
-    if (access(storage_posts_file(), R_OK) == 0) {
-        char destination[PATH_MAX];
-
-        if (path_join(destination, sizeof(destination), data_target,
-                      "posts.db") < 0 ||
-            storage_copy_file(storage_posts_file(), destination) < 0) {
-            return -1;
-        }
-    }
-    if (access(storage_replies_file(), R_OK) == 0) {
-        char destination[PATH_MAX];
-
-        if (path_join(destination, sizeof(destination), data_target,
-                      "replies.db") < 0 ||
-            storage_copy_file(storage_replies_file(), destination) < 0) {
-            return -1;
-        }
-    }
-    if (access(storage_file_index(), R_OK) == 0) {
-        char destination[PATH_MAX];
-
-        if (path_join(destination, sizeof(destination), data_target,
-                      "files.db") < 0 ||
-            storage_copy_file(storage_file_index(), destination) < 0) {
-            return -1;
-        }
-    }
-    if (access(storage_chat_log_file(), R_OK) == 0) {
-        char destination[PATH_MAX];
-
-        if (path_join(destination, sizeof(destination), logs_target,
-                      "chat.log") < 0 ||
-            storage_copy_file(storage_chat_log_file(), destination) < 0) {
-            return -1;
-        }
+    if (copy_if_readable(storage_users_file(), data_target, "users.db") < 0 ||
+        copy_if_readable(storage_posts_file(), data_target, "posts.db") < 0 ||
+        copy_if_readable(storage_replies_file(), data_target, "replies.db") <
+            0 ||
+        copy_if_readable(storage_file_index(), data_target, "files.db") < 0 ||
+        copy_if_readable(storage_friends_file(), data_target, "friends.db") <
+            0 ||
+        copy_if_readable(storage_private_requests_file(), data_target,
+                         "private_requests.db") < 0 ||
+        copy_if_readable(storage_groups_file(), data_target, "groups.db") <
+            0 ||
+        copy_if_readable(storage_group_members_file(), data_target,
+                         "group_members.db") < 0 ||
+        copy_if_readable(storage_chat_log_file(), logs_target, "chat.log") <
+            0) {
+        return -1;
     }
     if (copy_tree(storage_upload_dir(), uploads_target) < 0) {
         return -1;
