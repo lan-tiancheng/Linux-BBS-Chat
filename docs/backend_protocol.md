@@ -42,6 +42,9 @@ Realtime events:
 ```text
 GMSG <group_id> <sender> <message>
 PMSG <sender> <message>
+EVENT GROUP_INVITED <group_id>|<owner>|<name>
+EVENT BBS_POST_CREATED <post_id>|<author>|<title>
+EVENT BBS_REPLY_CREATED <post_id>|<reply_id>|<author>
 ```
 
 Private chat starts as a request. A non-friend may send one initial message with `PRIVATE_START`. When the receiver replies with `PRIVATE_REPLY`, both users become friends. Groups are created from existing friends only; the old global group chat is removed.
@@ -135,6 +138,22 @@ Attachment permission rules:
 - Only the reply author may upload a reply attachment.
 - Other users may download attachments.
 
+
+## Notifications
+
+Commands:
+
+    NOTIFICATIONS
+    MARK_READ <notification_id>
+    MARK_READ_ALL
+
+NOTIFICATIONS returns persisted notifications for the logged-in account. Each row is pipe-separated:
+
+    NOTIFICATIONS_BEGIN
+    NOTIFICATION <id>|<type>|<target>|<message>|<created_at>|<read_flag>
+    NOTIFICATIONS_END
+
+read_flag is 0 for unread and 1 for read. Realtime EVENT delivery is unchanged; matching notification rows are still written so offline users can retrieve missed group invites, BBS replies, file-ready events, and private messages later.
 ## Storage
 
 Default paths:
@@ -144,6 +163,7 @@ data/users.db
 data/posts.db
 data/replies.db
 data/files.db
+data/notifications.db
 logs/chat.log
 uploads/chat/
 downloads/

@@ -131,8 +131,10 @@ def main():
 
         send_line(alice, "POST first_title first post content")
         assert receive_line(alice) == "OK post 1 created"
+        assert receive_line(bob).startswith('EVENT BBS_POST_CREATED 1|alpha|')
         send_line(bob, "REPLY 1 reply content from bob")
         assert receive_line(bob) == "OK reply 1 created"
+        assert receive_line(alice) == 'EVENT BBS_REPLY_CREATED 1|1|beta'
 
         send_line(alice, "LISTPOST")
         assert receive_line(alice) == "OK posts"

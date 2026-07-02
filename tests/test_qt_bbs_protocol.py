@@ -90,6 +90,7 @@ def main():
 
         send_line(alice, "BBS_CREATE qt title|qt content")
         assert receive_line(alice) == "OK post 1 created"
+        assert receive_line(bob).startswith('EVENT BBS_POST_CREATED 1|alpha|')
         post_payload = b"post attachment bytes\n"
         send_line(alice, f"BBS_UPLOAD_POST 1 post.txt {len(post_payload)}")
         alice.sendall(post_payload)
@@ -97,6 +98,7 @@ def main():
 
         send_line(bob, "BBS_REPLY 1|reply from bob")
         assert receive_line(bob) == "OK reply 1 created"
+        assert receive_line(alice) == 'EVENT BBS_REPLY_CREATED 1|1|beta'
         reply_payload = b"reply attachment bytes\n"
         send_line(bob, f"BBS_UPLOAD_REPLY 1 reply.txt {len(reply_payload)}")
         bob.sendall(reply_payload)
@@ -144,6 +146,7 @@ def main():
         assert receive_line(bob) == "OK private message sent"
         send_line(alice, "GROUP_CREATE qtgroup beta")
         assert receive_line(alice) == "OK group 1 created"
+        assert receive_line(bob) == 'EVENT GROUP_INVITED 1|100000001|qtgroup'
         send_line(alice, "GROUP_SEND 1 qt-history-check")
         assert receive_line(alice).endswith(" qt-history-check")
         assert receive_line(bob).endswith(" qt-history-check")

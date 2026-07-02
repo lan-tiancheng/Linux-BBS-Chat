@@ -562,3 +562,68 @@ label {
     max-width: 100%;
   }
 }
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  margin-left: var(--space-xs);
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.notifications-panel {
+  padding: var(--space-lg);
+}
+
+.notification-list {
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.notification-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-sm);
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-md);
+  background: var(--panel-soft);
+  color: var(--ink);
+  text-align: left;
+}
+
+.notification-row.unread {
+  border-color: var(--primary);
+  background: #e8f4ee;
+}
+
+.notification-row strong {
+  display: block;
+}
+
+.notification-row span,
+.notification-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.notification-state {
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 900;
+}

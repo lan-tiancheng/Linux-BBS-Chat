@@ -13,6 +13,14 @@
 ```text
 Linux-BBS-Chat/
 ├── data/
+
+#### notifications.db
+
+格式：
+
+    notification_id|account|type|target|message|created_at|read
+
+通知字段采用和 BBS/群聊存储一致的文本落盘方式；字符串字段会进行简单转义，便于保存包含空格的消息。
 ├── logs/
 ├── uploads/
 ├── downloads/
@@ -29,6 +37,7 @@ Linux-BBS-Chat/
 - `data/posts.db`
 - `data/replies.db`
 - `data/files.db`
+- data/notifications.db
 
 用户数据采用文本格式，每行一条记录，便于调试和备份。
 
@@ -64,10 +73,26 @@ reply_id|post_id|author|content|created_at|active
 file_id|owner|sender|recipient|filename|stored_name|size|created_at|active
 ```
 
+
+#### notifications.db
+
+格式：
+
+    notification_id|account|type|target|message|created_at|read
+
+通知字段采用和 BBS/群聊存储一致的文本落盘方式；字符串字段会进行简单转义，便于保存包含空格的消息。
 ### `logs/`
 
 保存运行日志和聊天日志。当前实现默认使用：
 
+
+#### notifications.db
+
+格式：
+
+    notification_id|account|type|target|message|created_at|read
+
+通知字段采用和 BBS/群聊存储一致的文本落盘方式；字符串字段会进行简单转义，便于保存包含空格的消息。
 - `logs/chat.log`
 
 格式示例：
@@ -108,6 +133,14 @@ recipient__filename
 ```text
 backup/<label>/
 ├── data/
+
+#### notifications.db
+
+格式：
+
+    notification_id|account|type|target|message|created_at|read
+
+通知字段采用和 BBS/群聊存储一致的文本落盘方式；字符串字段会进行简单转义，便于保存包含空格的消息。
 ├── logs/
 └── uploads/
 ```
@@ -120,12 +153,21 @@ backup/<label>/
 - `BBS_CHAT_LOG`
 - `BBS_UPLOAD_DIR`
 - `BBS_DOWNLOAD_DIR`
+- BBS_NOTIFICATIONS_FILE
 
 这样测试时可以把数据放到临时目录，避免污染仓库本体。
 
 ## 备份建议
 
 - 交作业前导出一次完整目录
+
+#### notifications.db
+
+格式：
+
+    notification_id|account|type|target|message|created_at|read
+
+通知字段采用和 BBS/群聊存储一致的文本落盘方式；字符串字段会进行简单转义，便于保存包含空格的消息。
 - `data/`、`logs/`、`uploads/` 按日期打包
 - 报告里说明哪些数据属于运行时生成，哪些属于提交材料
 

@@ -47,6 +47,7 @@ def start_server(tempdir):
     env["BBS_PRIVATE_REQUESTS_FILE"] = os.path.join(tempdir, "private_requests.db")
     env["BBS_GROUPS_FILE"] = os.path.join(tempdir, "groups.db")
     env["BBS_GROUP_MEMBERS_FILE"] = os.path.join(tempdir, "group_members.db")
+    env["BBS_NOTIFICATIONS_FILE"] = os.path.join(tempdir, "notifications.db")
     os.makedirs(env["BBS_UPLOAD_DIR"], exist_ok=True)
 
     return subprocess.Popen(

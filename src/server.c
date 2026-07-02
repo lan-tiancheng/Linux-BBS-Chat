@@ -1,6 +1,7 @@
 #include "chat.h"
 #include "bbs.h"
 #include "file_transfer.h"
+#include "notification.h"
 #include "protocol.h"
 #include "storage.h"
 #include "server.h"
@@ -213,10 +214,14 @@ static void notify_file_ready(const char *sender, const char *recipient,
                               unsigned long long size)
 {
     char response[MAX_LINE_LENGTH];
+    char message[MAX_LINE_LENGTH];
     size_t i;
 
     snprintf(response, sizeof(response), "FILE_READY %s %s %llu", sender,
              filename, size);
+    snprintf(message, sizeof(message), "%s uploaded %s (%llu bytes)",
+             sender, filename, size);
+    (void)notification_add(recipient, "FILE_READY", filename, message, NULL);
     pthread_mutex_lock(&clients_mutex);
     for (i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i].active && clients[i].logged_in &&
@@ -269,6 +274,25 @@ static int send_to_account(const char *account, const char *line)
     return delivered;
 }
 
+static void broadcast_to_logged_in_except(const char *except_account,
+                                          const char *line)
+{
+    size_t i;
+
+    pthread_mutex_lock(&clients_mutex);
+    for (i = 0; i < MAX_CLIENTS; i++) {
+        if (!clients[i].active || !clients[i].logged_in) {
+            continue;
+        }
+        if (except_account != NULL &&
+            strcmp(clients[i].username, except_account) == 0) {
+            continue;
+        }
+        (void)slot_send_line(&clients[i], line);
+    }
+    pthread_mutex_unlock(&clients_mutex);
+}
+
 static int private_message(const ClientSlot *sender, const char *recipient,
                            const char *message)
 {
@@ -306,6 +330,54 @@ static void copy_protocol_field(char *destination, size_t capacity,
     }
     destination[i] = '\0';
 }
+static void add_notification_record(const char *account, const char *type,
+                                    const char *target, const char *message)
+{
+    (void)notification_add(account, type, target, message, NULL);
+}
+
+static void format_unsigned_field(unsigned long value, char *buffer,
+                                  size_t capacity)
+{
+    snprintf(buffer, capacity, "%lu", value);
+}
+
+typedef struct {
+    ClientSlot *client;
+} NotificationListContext;
+
+static int send_notification_item(const NotificationRecord *record,
+                                  void *context)
+{
+    NotificationListContext *list = context;
+    char type[NOTIFICATION_TYPE_LENGTH + 1];
+    char target[NOTIFICATION_TARGET_LENGTH + 1];
+    char message[NOTIFICATION_MESSAGE_LENGTH + 1];
+    char created_at[32];
+    char line[MAX_LINE_LENGTH * 2];
+
+    copy_protocol_field(type, sizeof(type), record->type);
+    copy_protocol_field(target, sizeof(target), record->target);
+    copy_protocol_field(message, sizeof(message), record->message);
+    copy_protocol_field(created_at, sizeof(created_at), record->created_at);
+    snprintf(line, sizeof(line), "NOTIFICATION %lu|%s|%s|%s|%s|%d",
+             record->id, type, target, message, created_at,
+             record->read ? 1 : 0);
+    return slot_send_line(list->client, line) < 0 ? -1 : 0;
+}
+
+static int send_notifications(ClientSlot *client)
+{
+    NotificationListContext context = {client};
+
+    if (slot_send_line(client, "NOTIFICATIONS_BEGIN") < 0 ||
+        notification_visit_for(client->username, send_notification_item,
+                               &context) < 0) {
+        return 1;
+    }
+    return slot_send_line(client, "NOTIFICATIONS_END") < 0;
+}
+
 
 typedef struct {
     const char *owner;
@@ -447,12 +519,93 @@ static int deliver_group_member(const char *account, void *context)
     return 0;
 }
 
+typedef struct {
+    const char *owner;
+    const char *name;
+    unsigned long group_id;
+} GroupInviteContext;
+
+static int notify_group_member_invited(const char *account, void *context)
+{
+    GroupInviteContext *invite = context;
+    char group_name[64];
+    char line[MAX_LINE_LENGTH];
+    char target[32];
+    char message[MAX_LINE_LENGTH];
+
+    if (strcmp(account, invite->owner) == 0) {
+        return 0;
+    }
+    copy_protocol_field(group_name, sizeof(group_name), invite->name);
+    format_unsigned_field(invite->group_id, target, sizeof(target));
+    snprintf(message, sizeof(message), "invited by %s to %s",
+             invite->owner, group_name);
+    add_notification_record(account, "GROUP_INVITED", target, message);
+    snprintf(line, sizeof(line), "EVENT GROUP_INVITED %lu|%s|%s",
+             invite->group_id, invite->owner, group_name);
+    (void)send_to_account(account, line);
+    return 0;
+}
+
+static void notify_group_invited(unsigned long group_id, const char *owner,
+                                 const char *name)
+{
+    GroupInviteContext invite = {owner, name, group_id};
+
+    (void)social_visit_group_members(group_id, notify_group_member_invited,
+                                     &invite);
+}
+
+static void notify_bbs_post_created(const char *author_account,
+                                    const BbsPostRecord *record)
+{
+    char title[BBS_TITLE_LENGTH + 1];
+    char line[MAX_LINE_LENGTH * 2];
+
+    copy_protocol_field(title, sizeof(title), record->title);
+    snprintf(line, sizeof(line), "EVENT BBS_POST_CREATED %lu|%s|%s",
+             record->id, record->author, title);
+    broadcast_to_logged_in_except(author_account, line);
+}
+
+static void notify_bbs_reply_created(const char *author_account,
+                                     const BbsReplyRecord *record)
+{
+    BbsPostRecord post;
+    UserRecord post_author;
+    char target[32];
+    char message[MAX_LINE_LENGTH];
+    char line[MAX_LINE_LENGTH];
+
+    if (bbs_read_post(record->post_id, &post) == 0 &&
+        user_find(post.author, &post_author) > 0 &&
+        strcmp(post_author.account, author_account) != 0) {
+        format_unsigned_field(record->post_id, target, sizeof(target));
+        snprintf(message, sizeof(message), "%s replied to post %lu",
+                 record->author, record->post_id);
+        add_notification_record(post_author.account, "BBS_REPLY_CREATED",
+                                target, message);
+    }
+    snprintf(line, sizeof(line), "EVENT BBS_REPLY_CREATED %lu|%lu|%s",
+             record->post_id, record->id, record->author);
+    broadcast_to_logged_in_except(author_account, line);
+}
+
 static void copy_account(char *destination, size_t capacity,
                          const char *source)
 {
     if (snprintf(destination, capacity, "%s", source) >= (int)capacity) {
         destination[0] = '\0';
     }
+}
+
+static int protocol_text_field_valid(const char *text)
+{
+    if (text == NULL || *text == '\0') {
+        return 0;
+    }
+    return strchr(text, '|') == NULL && strchr(text, '\r') == NULL &&
+           strchr(text, '\n') == NULL;
 }
 
 static char *trim_token(char *text)
@@ -825,6 +978,7 @@ static int handle_command(ClientSlot *client, char *line)
                    "LISTPOST VIEWPOST <post_id> "
                    "BBS_LIST BBS_VIEW <post_id> BBS_CREATE <title>|<content> "
                    "BBS_REPLY <post_id>|<content> BACKUP [label] "
+                   "NOTIFICATIONS MARK_READ <notification_id> MARK_READ_ALL "
                    "PING ECHO <text> HELP QUIT") < 0;
     }
     if (strcmp(line, "WHO") == 0) {
@@ -865,6 +1019,45 @@ static int handle_command(ClientSlot *client, char *line)
         }
         snprintf(response, sizeof(response), "ECHO %s", argument);
         return slot_send_line(client, response) < 0;
+    }
+    if (strcmp(line, "NOTIFICATIONS") == 0) {
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        return send_notifications(client);
+    }
+    if (strcmp(line, "MARK_READ") == 0) {
+        unsigned long notification_id;
+        char *end = NULL;
+        int mark_result;
+
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (argument == NULL || *argument == 0) {
+            return slot_send_line(client, "ERR usage: MARK_READ <notification_id>") < 0;
+        }
+        notification_id = strtoul(argument, &end, 10);
+        if (end == NULL || *end != 0 || notification_id == 0) {
+            return slot_send_line(client, "ERR invalid notification id") < 0;
+        }
+        mark_result = notification_mark_read(client->username, notification_id);
+        if (mark_result < 0) {
+            return slot_send_line(client, "ERR notification update failed") < 0;
+        }
+        if (mark_result == 0) {
+            return slot_send_line(client, "ERR notification not found") < 0;
+        }
+        return slot_send_line(client, "OK notification read") < 0;
+    }
+    if (strcmp(line, "MARK_READ_ALL") == 0) {
+        if (!client_is_logged_in(client)) {
+            return slot_send_line(client, "ERR login required") < 0;
+        }
+        if (notification_mark_all_read(client->username) < 0) {
+            return slot_send_line(client, "ERR notification update failed") < 0;
+        }
+        return slot_send_line(client, "OK notifications read") < 0;
     }
     if (strcmp(line, "REGISTER") == 0) {
         char account[USER_ACCOUNT_LENGTH + 1];
@@ -1019,6 +1212,7 @@ static int handle_command(ClientSlot *client, char *line)
         char *message;
         UserRecord target;
         int delivery;
+        int private_request = 0;
 
         if (!client_is_logged_in(client)) {
             return slot_send_line(client, "ERR login required") < 0;
@@ -1049,6 +1243,7 @@ static int handle_command(ClientSlot *client, char *line)
                            "ERR no incoming request from this user") < 0;
             }
         } else if (!social_are_friends(client->username, target.account)) {
+            private_request = 1;
             if (social_add_private_request(client->username, target.account,
                                            message) < 0) {
                 return slot_send_line(client, "ERR request save failed") < 0;
@@ -1058,6 +1253,11 @@ static int handle_command(ClientSlot *client, char *line)
         if (delivery < 0) {
             return slot_send_line(client,
                                   "ERR private delivery failed") < 0;
+        }
+        if (delivery == 0) {
+            (void)notification_add(target.account,
+                                   private_request ? "PRIVATE_REQUEST" : "PRIVATE_MESSAGE",
+                                   client->username, message, NULL);
         }
         if (social_are_friends(client->username, target.account)) {
             return slot_send_line(client, "OK private message sent") < 0;
@@ -1123,6 +1323,7 @@ static int handle_command(ClientSlot *client, char *line)
                                 count, &group_id) < 0) {
             return slot_send_line(client, "ERR group create failed") < 0;
         }
+        notify_group_invited(group_id, client->username, group_name);
         snprintf(response, sizeof(response), "OK group %lu created", group_id);
         return slot_send_line(client, response) < 0;
     }
@@ -1271,6 +1472,7 @@ static int handle_command(ClientSlot *client, char *line)
             return slot_send_line(client, "ERR post save failed") < 0;
         }
         snprintf(response, sizeof(response), "OK post %lu created", record.id);
+        notify_bbs_post_created(client->username, &record);
         return slot_send_line(client, response) < 0;
     }
     if (strcmp(line, "REPLY") == 0) {
@@ -1313,6 +1515,7 @@ static int handle_command(ClientSlot *client, char *line)
             return slot_send_line(client, "ERR reply save failed") < 0;
         }
         snprintf(response, sizeof(response), "OK reply %lu created", record.id);
+        notify_bbs_reply_created(client->username, &record);
         return slot_send_line(client, response) < 0;
     }
     if (strcmp(line, "LISTPOST") == 0) {
@@ -1440,9 +1643,11 @@ static int handle_command(ClientSlot *client, char *line)
                        client, "ERR usage: BBS_CREATE <title>|<content>") < 0;
         }
         *separator++ = '\0';
-        if (*argument == '\0' || *separator == '\0') {
-            return slot_send_line(
-                       client, "ERR usage: BBS_CREATE <title>|<content>") < 0;
+        if (!protocol_text_field_valid(argument)) {
+            return slot_send_line(client, "ERR invalid BBS title") < 0;
+        }
+        if (!protocol_text_field_valid(separator)) {
+            return slot_send_line(client, "ERR invalid BBS content") < 0;
         }
         memset(&record, 0, sizeof(record));
         if (bbs_next_post_id(&record.id) < 0) {
@@ -1459,6 +1664,7 @@ static int handle_command(ClientSlot *client, char *line)
             return slot_send_line(client, "ERR post save failed") < 0;
         }
         snprintf(response, sizeof(response), "OK post %lu created", record.id);
+        notify_bbs_post_created(client->username, &record);
         return slot_send_line(client, response) < 0;
     }
     if (strcmp(line, "BBS_REPLY") == 0) {
@@ -1481,9 +1687,8 @@ static int handle_command(ClientSlot *client, char *line)
         if (errno != 0 || end == NULL || *end != '\0' || post_id == 0) {
             return slot_send_line(client, "ERR invalid post id") < 0;
         }
-        if (*separator == '\0') {
-            return slot_send_line(
-                       client, "ERR usage: BBS_REPLY <post_id>|<content>") < 0;
+        if (!protocol_text_field_valid(separator)) {
+            return slot_send_line(client, "ERR invalid BBS reply content") < 0;
         }
         if (bbs_read_post(post_id, &(BbsPostRecord){0}) < 0) {
             return slot_send_line(client, "ERR post not found") < 0;
@@ -1502,6 +1707,7 @@ static int handle_command(ClientSlot *client, char *line)
             return slot_send_line(client, "ERR reply save failed") < 0;
         }
         snprintf(response, sizeof(response), "OK reply %lu created", record.id);
+        notify_bbs_reply_created(client->username, &record);
         return slot_send_line(client, response) < 0;
     }
     if (strcmp(line, "BBS_UPLOAD_POST") == 0 ||
@@ -1712,6 +1918,10 @@ int run_server(int port)
     }
     if (social_init() < 0) {
         perror("initialize social storage");
+        return 1;
+    }
+    if (notification_init() < 0) {
+        perror("initialize notification storage");
         return 1;
     }
     for (i = 0; i < MAX_CLIENTS; i++) {

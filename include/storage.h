@@ -22,6 +22,7 @@ const char *storage_friends_file(void);
 const char *storage_private_requests_file(void);
 const char *storage_groups_file(void);
 const char *storage_group_members_file(void);
+const char *storage_notifications_file(void);
 
 int storage_ensure_directory(const char *path);
 int storage_init(void);

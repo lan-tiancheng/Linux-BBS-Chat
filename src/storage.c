@@ -39,6 +39,7 @@ static char friends_file_path[PATH_MAX];
 static char private_requests_file_path[PATH_MAX];
 static char groups_file_path[PATH_MAX];
 static char group_members_file_path[PATH_MAX];
+static char notifications_file_path[PATH_MAX];
 
 static const char *env_or_default(const char *name, const char *fallback)
 {
@@ -172,6 +173,7 @@ static void initialize_paths(void)
     const char *private_requests_file = getenv("BBS_PRIVATE_REQUESTS_FILE");
     const char *groups_file = getenv("BBS_GROUPS_FILE");
     const char *group_members_file = getenv("BBS_GROUP_MEMBERS_FILE");
+    const char *notifications_file = getenv("BBS_NOTIFICATIONS_FILE");
 
     set_path(data_dir_path, sizeof(data_dir_path), data_dir);
     set_path(logs_dir_path, sizeof(logs_dir_path), logs_dir);
@@ -235,6 +237,13 @@ static void initialize_paths(void)
     } else {
         (void)path_join(group_members_file_path, sizeof(group_members_file_path),
                         data_dir_path, "group_members.db");
+    }
+    if (notifications_file != NULL && *notifications_file != '\0') {
+        set_path(notifications_file_path, sizeof(notifications_file_path),
+                 notifications_file);
+    } else {
+        (void)path_join(notifications_file_path, sizeof(notifications_file_path),
+                        data_dir_path, "notifications.db");
     }
 }
 
@@ -331,6 +340,12 @@ const char *storage_group_members_file(void)
     return group_members_file_path;
 }
 
+const char *storage_notifications_file(void)
+{
+    pthread_once(&storage_once, initialize_paths);
+    return notifications_file_path;
+}
+
 int storage_ensure_directory(const char *path)
 {
     return ensure_directory_chain(path);
@@ -352,7 +367,8 @@ int storage_init(void)
         ensure_parent_directory(storage_friends_file()) < 0 ||
         ensure_parent_directory(storage_private_requests_file()) < 0 ||
         ensure_parent_directory(storage_groups_file()) < 0 ||
-        ensure_parent_directory(storage_group_members_file()) < 0) {
+        ensure_parent_directory(storage_group_members_file()) < 0 ||
+        ensure_parent_directory(storage_notifications_file()) < 0) {
         return -1;
     }
 
@@ -364,6 +380,7 @@ int storage_init(void)
     open_and_close(storage_friends_file());
     open_and_close(storage_private_requests_file());
     open_and_close(storage_groups_file());
+    open_and_close(storage_notifications_file());
     open_and_close(storage_group_members_file());
     return 0;
 }
@@ -548,6 +565,8 @@ int storage_backup_snapshot(const char *label, char *snapshot_path,
             0 ||
         copy_if_readable(storage_group_members_file(), data_target,
                          "group_members.db") < 0 ||
+        copy_if_readable(storage_notifications_file(), data_target,
+                         "notifications.db") < 0 ||
         copy_if_readable(storage_chat_log_file(), logs_target, "chat.log") <
             0) {
         return -1;

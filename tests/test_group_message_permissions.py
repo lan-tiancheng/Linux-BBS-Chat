@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 
 from protocol_test_utils import (
+    assert_group_invited,
     choose_test_port,
     connect_client,
     create_group,
@@ -54,6 +55,7 @@ def main():
     env["BBS_PRIVATE_REQUESTS_FILE"] = os.path.join(tempdir, "private_requests.db")
     env["BBS_GROUPS_FILE"] = os.path.join(tempdir, "groups.db")
     env["BBS_GROUP_MEMBERS_FILE"] = os.path.join(tempdir, "group_members.db")
+    env["BBS_NOTIFICATIONS_FILE"] = os.path.join(tempdir, "notifications.db")
     os.makedirs(env["BBS_UPLOAD_DIR"], exist_ok=True)
 
     server = subprocess.Popen(
@@ -80,6 +82,8 @@ def main():
         make_friends(beta, carol, "beta", "carol", "b-to-c")
 
         group_id = create_group(beta, "secure", "alpha,carol")
+        assert_group_invited(alpha, group_id, OWNER, 'secure')
+        assert_group_invited(carol, group_id, OWNER, 'secure')
 
         send_line(eve, f"GROUP_SEND {group_id} hello")
         assert receive_line(eve) == "ERR group not found"

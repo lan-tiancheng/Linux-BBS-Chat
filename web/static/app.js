@@ -21,6 +21,7 @@ let collectingFriends = false;
 let collectingRequests = false;
 let collectingSentRequests = false;
 let collectingGroups = false;
+let collectingNotifications = false;
 let collectingPrivateHistory = false;
 let collectingGroupHistory = false;
 let loadingConversationKey = "";
@@ -30,6 +31,7 @@ let friends = [];
 let requests = [];
 let sentRequests = [];
 let groups = [];
+let notifications = [];
 
 const $ = (id) => document.getElementById(id);
 
@@ -143,6 +145,103 @@ function parseBbsReply(line) {
   };
 }
 
+function parseNotification(line) {
+  const parts = line.replace('NOTIFICATION ', '').split('|');
+  return {
+    id: parts[0] || '',
+    type: parts[1] || '',
+    target: parts[2] || '',
+    message: parts[3] || '',
+    createdAt: parts[4] || '',
+    read: parts[5] === '1',
+  };
+}
+
+function notificationLabel(type) {
+  const labels = {
+    GROUP_INVITED: '群聊邀请',
+    BBS_POST_CREATED: '新帖子',
+    BBS_REPLY_CREATED: '帖子新回复',
+    FILE_READY: '文件已到达',
+    PRIVATE_REQUEST: '私信请求',
+    PRIVATE_MESSAGE: '私信消息',
+  };
+  return labels[type] || type;
+}
+
+function renderNotifications() {
+  const unread = notifications.filter((item) => !item.read).length;
+  const badge = document.getElementById('notificationBadge');
+  badge.textContent = String(unread);
+  badge.classList.toggle('hidden', unread === 0);
+
+  const list = document.getElementById('notificationList');
+  list.innerHTML = '';
+  if (notifications.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = '暂无通知。';
+    list.appendChild(empty);
+    return;
+  }
+  notifications.slice().reverse().forEach((item) => {
+    const button = document.createElement('button');
+    const body = document.createElement('div');
+    const title = document.createElement('strong');
+    const message = document.createElement('span');
+    const time = document.createElement('small');
+    const state = document.createElement('span');
+
+    button.type = 'button';
+    button.className = 'notification-row' + (item.read ? '' : ' unread');
+    title.textContent = notificationLabel(item.type);
+    message.textContent = item.message || item.target || '-';
+    time.textContent = item.createdAt;
+    state.className = 'notification-state';
+    state.textContent = item.read ? '已读' : '未读';
+    body.appendChild(title);
+    body.appendChild(message);
+    body.appendChild(time);
+    button.appendChild(body);
+    button.appendChild(state);
+    button.addEventListener('click', () => openNotification(item));
+    list.appendChild(button);
+  });
+}
+
+function openNotification(item) {
+  if (!item.read && item.id) {
+    item.read = true;
+    renderNotifications();
+    send('MARK_READ ' + item.id).catch(reportError);
+  }
+  if (item.type === 'GROUP_INVITED') {
+    switchPage('chatPage');
+    send('GROUPS').catch(reportError);
+    const group = groups.find((entry) => entry.id === item.target);
+    if (group) selectGroup(group.id, group.name);
+    return;
+  }
+  if (item.type === 'BBS_REPLY_CREATED' || item.type === 'BBS_POST_CREATED') {
+    switchPage('bbsPage');
+    send('BBS_LIST').catch(reportError);
+    if (item.target) send('BBS_VIEW ' + item.target).catch(reportError);
+    return;
+  }
+  if (item.type === 'FILE_READY') {
+    switchPage('toolsPage');
+    if (item.target) document.getElementById('downloadName').value = item.target;
+    document.getElementById('downloadName').focus();
+    return;
+  }
+  if (item.type === 'PRIVATE_REQUEST' || item.type === 'PRIVATE_MESSAGE') {
+    switchPage('chatPage');
+    send('FRIENDS').catch(reportError);
+    send('REQUESTS').catch(reportError);
+    if (item.target) selectPrivate(item.target, item.target, item.type === 'PRIVATE_REQUEST' ? 'reply' : 'start');
+  }
+}
+
 function activateShell(account, nickname, resumed = false) {
   currentAccount = account;
   currentNickname = nickname || account;
@@ -166,6 +265,7 @@ function resetAppState() {
   requests = [];
   sentRequests = [];
   groups = [];
+  notifications = [];
   postRows = [];
   detailRows = [];
   selectedPostAttachment = null;
@@ -184,6 +284,8 @@ function resetAppState() {
   $("friendList").innerHTML = "";
   $("groupFriendChecks").innerHTML = "";
   $("groupList").innerHTML = "";
+  document.getElementById("notificationList").innerHTML = "";
+  document.getElementById("notificationBadge").classList.add("hidden");
   $("postList").innerHTML = "";
   $("postDetail").innerHTML = `<div class="empty">选择帖子查看详情。</div>`;
   $("chatFeed").innerHTML = `<div class="empty">暂无消息。</div>`;
@@ -538,6 +640,9 @@ function handleLine(line) {
     send("REQUESTS").catch(reportError);
     send("SENT_REQUESTS").catch(reportError);
   }
+  if (line === 'OK notification read' || line === 'OK notifications read') {
+    send('NOTIFICATIONS').catch(reportError);
+  }
 
   if (line === "FRIENDS_BEGIN") {
     collectingFriends = true;
@@ -602,6 +707,21 @@ function handleLine(line) {
     return;
   }
 
+  if (line === 'NOTIFICATIONS_BEGIN') {
+    collectingNotifications = true;
+    notifications = [];
+    return;
+  }
+  if (line === 'NOTIFICATIONS_END') {
+    collectingNotifications = false;
+    renderNotifications();
+    return;
+  }
+  if (collectingNotifications && line.startsWith('NOTIFICATION ')) {
+    notifications.push(parseNotification(line));
+    return;
+  }
+
   if (line.startsWith("USER ")) {
     const identity = parseIdentity(line.replace("USER ", ""));
     $("searchResult").innerHTML = "";
@@ -640,6 +760,21 @@ function handleLine(line) {
     box.loaded = true;
     renderActiveConversation();
     return;
+  }
+
+  if (line.startsWith('EVENT GROUP_INVITED ')) {
+    send('GROUPS').catch(reportError);
+    send('NOTIFICATIONS').catch(reportError);
+    return;
+  }
+  if (line.startsWith('EVENT BBS_POST_CREATED ') || line.startsWith('EVENT BBS_REPLY_CREATED ')) {
+    send('BBS_LIST').catch(reportError);
+    send('NOTIFICATIONS').catch(reportError);
+    if (currentPostId > 0) send('BBS_VIEW ' + currentPostId).catch(reportError);
+    return;
+  }
+  if (line.startsWith('FILE_READY ')) {
+    send('NOTIFICATIONS').catch(reportError);
   }
 
   if (line.startsWith("PMSG ")) {
@@ -779,6 +914,7 @@ function refreshAll() {
   send("REQUESTS").catch(reportError);
   send("SENT_REQUESTS").catch(reportError);
   send("GROUPS").catch(reportError);
+  send("NOTIFICATIONS").catch(reportError);
   setTimeout(() => send("BBS_LIST").catch(reportError), 150);
 }
 
@@ -853,6 +989,12 @@ $("historyBtn").addEventListener("click", () => {
   }
 });
 $("refreshPostsBtn").addEventListener("click", () => send("BBS_LIST").catch(reportError));
+document.getElementById('refreshNotificationsBtn').addEventListener('click', () => {
+  send('NOTIFICATIONS').catch(reportError);
+});
+document.getElementById('markAllNotificationsBtn').addEventListener('click', () => {
+  send('MARK_READ_ALL').catch(reportError);
+});
 
 $("searchUserBtn").addEventListener("click", () => {
   const login = clean($("userSearch").value);

@@ -87,6 +87,7 @@ def main():
     environment["BBS_PRIVATE_REQUESTS_FILE"] = os.path.join(upload_dir.name, "private_requests.db")
     environment["BBS_GROUPS_FILE"] = os.path.join(upload_dir.name, "groups.db")
     environment["BBS_GROUP_MEMBERS_FILE"] = os.path.join(upload_dir.name, "group_members.db")
+    environment["BBS_NOTIFICATIONS_FILE"] = os.path.join(upload_dir.name, "notifications.db")
 
     first_server = None
     second_server = None

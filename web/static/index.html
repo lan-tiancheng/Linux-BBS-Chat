@@ -75,6 +75,8 @@
       <button class="tab active" data-page="chatPage">私聊 / 群聊</button>
       <button class="tab" data-page="bbsPage">论坛</button>
       <button class="tab" data-page="toolsPage">文件 / 备份</button>
+      <button class="tab notification-tab" data-page="notificationsPage">通知 <span class="badge hidden" id="notificationBadge"></span></button>
+
       <button class="tab" data-page="consolePage">协议日志</button>
     </nav>
 
@@ -174,6 +176,7 @@
     </main>
 
     <main class="page" id="toolsPage">
+      <button class="tab notification-tab" data-page="notificationsPage">通知 <span class="badge hidden" id="notificationBadge"�</span></button>
       <section class="tool-grid">
         <article class="panel">
           <h3>发送文件</h3>
@@ -204,6 +207,19 @@
       <section class="panel downloads-card">
         <h3>下载结果</h3>
         <div id="downloads"></div>
+      </section>
+    </main>
+
+    <main class="page" id="notificationsPage">
+      <section class="panel notifications-panel">
+        <div class="section-head">
+          <h3>通知中心</h3>
+          <div class="inline-actions">
+            <button class="ghost small" id="refreshNotificationsBtn">刷新</button>
+            <button class="ghost small" id="markAllNotificationsBtn">全部已读</button>
+          </div>
+        </div>
+        <div class="notification-list" id="notificationList"></div>
       </section>
     </main>
 

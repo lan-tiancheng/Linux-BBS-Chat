@@ -5,7 +5,7 @@ LDFLAGS := -pthread
 
 BIN_DIR := bin
 COMMON_SRC := src/protocol.c src/storage.c
-SERVER_SRC := src/server.c src/user.c src/chat.c src/file_transfer.c src/bbs.c src/social.c $(COMMON_SRC)
+SERVER_SRC := src/server.c src/user.c src/chat.c src/file_transfer.c src/bbs.c src/social.c src/notification.c $(COMMON_SRC)
 CLIENT_SRC := src/client.c src/file_transfer.c src/user.c $(COMMON_SRC)
 SERVER_BIN := $(BIN_DIR)/server
 CLIENT_BIN := $(BIN_DIR)/client
@@ -35,6 +35,8 @@ test: all
 	python3 tests/test_group_create_edges.py
 	python3 tests/test_group_message_permissions.py
 	python3 tests/test_group_concurrency.py
+	python3 tests/test_notifications.py
+	python3 tests/test_bbs_content_edges.py
 	python3 tests/test_qt_bbs_protocol.py
 	python3 tests/test_web_gateway.py
 

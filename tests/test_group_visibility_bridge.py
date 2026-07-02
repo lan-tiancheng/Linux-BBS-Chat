@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 
 from protocol_test_utils import (
+    assert_group_invited,
     assert_group_visible,
     choose_test_port,
     connect_client,
@@ -29,6 +30,7 @@ def main():
     env["BBS_PRIVATE_REQUESTS_FILE"] = os.path.join(tempdir, "private_requests.db")
     env["BBS_GROUPS_FILE"] = os.path.join(tempdir, "groups.db")
     env["BBS_GROUP_MEMBERS_FILE"] = os.path.join(tempdir, "group_members.db")
+    env["BBS_NOTIFICATIONS_FILE"] = os.path.join(tempdir, "notifications.db")
     os.makedirs(env["BBS_UPLOAD_DIR"], exist_ok=True)
 
     server = subprocess.Popen(
@@ -64,6 +66,8 @@ def main():
         assert "FRIEND 100000003|carol" not in a_friends, a_friends
 
         group_id = create_group(b, "bridge", "alpha,carol")
+        assert_group_invited(a, group_id, '100000002', 'bridge')
+        assert_group_invited(c, group_id, '100000002', 'bridge')
 
         assert_group_visible(a, group_id, "100000002", "bridge")
         assert_group_visible(b, group_id, "100000002", "bridge")

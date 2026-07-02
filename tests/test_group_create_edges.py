@@ -6,6 +6,7 @@ import tempfile
 
 from protocol_test_utils import (
     assert_group_not_visible,
+    assert_group_invited,
     assert_group_visible,
     choose_test_port,
     connect_client,
@@ -39,6 +40,7 @@ def main():
     env["BBS_PRIVATE_REQUESTS_FILE"] = os.path.join(tempdir, "private_requests.db")
     env["BBS_GROUPS_FILE"] = os.path.join(tempdir, "groups.db")
     env["BBS_GROUP_MEMBERS_FILE"] = os.path.join(tempdir, "group_members.db")
+    env["BBS_NOTIFICATIONS_FILE"] = os.path.join(tempdir, "notifications.db")
     os.makedirs(env["BBS_UPLOAD_DIR"], exist_ok=True)
 
     server = subprocess.Popen(
@@ -68,11 +70,16 @@ def main():
         make_friends(beta, david, "beta", "david", "b-to-d")
 
         team_id = create_group(beta, "team", "alpha,carol,david")
+        assert_group_invited(alpha, team_id, OWNER, 'team')
+        assert_group_invited(carol, team_id, OWNER, 'team')
+        assert_group_invited(david, team_id, OWNER, 'team')
         for conn in (alpha, beta, carol, david):
             assert_group_visible(conn, team_id, OWNER, "team")
         assert_group_not_visible(eve, team_id)
 
         mixed_id = create_group(beta, "mixed", "alpha,100000003")
+        assert_group_invited(alpha, mixed_id, OWNER, 'mixed')
+        assert_group_invited(carol, mixed_id, OWNER, 'mixed')
         assert_group_visible(alpha, mixed_id, OWNER, "mixed")
         assert_group_visible(beta, mixed_id, OWNER, "mixed")
         assert_group_visible(carol, mixed_id, OWNER, "mixed")
@@ -80,6 +87,8 @@ def main():
         assert_group_not_visible(eve, mixed_id)
 
         spaced_id = create_group(beta, "spaced", "alpha, carol")
+        assert_group_invited(alpha, spaced_id, OWNER, 'spaced')
+        assert_group_invited(carol, spaced_id, OWNER, 'spaced')
         assert_group_visible(alpha, spaced_id, OWNER, "spaced")
         assert_group_visible(beta, spaced_id, OWNER, "spaced")
         assert_group_visible(carol, spaced_id, OWNER, "spaced")
@@ -87,6 +96,8 @@ def main():
         assert_group_not_visible(eve, spaced_id)
 
         partial_id = create_group(beta, "partial", "alpha,unknown,carol")
+        assert_group_invited(alpha, partial_id, OWNER, 'partial')
+        assert_group_invited(carol, partial_id, OWNER, 'partial')
         assert_group_visible(alpha, partial_id, OWNER, "partial")
         assert_group_visible(beta, partial_id, OWNER, "partial")
         assert_group_visible(carol, partial_id, OWNER, "partial")
@@ -94,6 +105,7 @@ def main():
         assert_group_not_visible(eve, partial_id)
 
         secure_id = create_group(beta, "secure", "alpha,eve")
+        assert_group_invited(alpha, secure_id, OWNER, 'secure')
         assert_group_visible(alpha, secure_id, OWNER, "secure")
         assert_group_visible(beta, secure_id, OWNER, "secure")
         assert_group_not_visible(eve, secure_id)

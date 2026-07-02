@@ -77,6 +77,7 @@ def main():
     environment["BBS_PRIVATE_REQUESTS_FILE"] = os.path.join(upload_dir, "private_requests.db")
     environment["BBS_GROUPS_FILE"] = os.path.join(upload_dir, "groups.db")
     environment["BBS_GROUP_MEMBERS_FILE"] = os.path.join(upload_dir, "group_members.db")
+    environment["BBS_NOTIFICATIONS_FILE"] = os.path.join(upload_dir, "notifications.db")
     server = subprocess.Popen(
         ["./bin/server", str(PORT)],
         stdout=subprocess.PIPE,
@@ -173,6 +174,7 @@ def main():
 
         send_line(first, "GROUP_CREATE project beta")
         assert receive_line(first) == "OK group 1 created"
+        assert receive_line(second) == 'EVENT GROUP_INVITED 1|100000001|project'
         send_line(first, "GROUP_SEND 1 hello-from-first")
         first_event = receive_line(first)
         second_event = receive_line(second)

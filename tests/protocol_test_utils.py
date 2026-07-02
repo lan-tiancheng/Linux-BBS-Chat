@@ -60,13 +60,18 @@ def make_friends(sender, receiver, sender_nick, receiver_nick, message):
     assert receive_line(receiver) == "OK private message sent"
 
 
+
+
 def collect_groups(conn):
-    send_line(conn, "GROUPS")
-    assert receive_line(conn) == "GROUPS_BEGIN"
+    send_line(conn, 'GROUPS')
+    line = receive_line(conn)
+    while line.startswith('EVENT '):
+        line = receive_line(conn)
+    assert line == 'GROUPS_BEGIN'
     items = []
     while True:
         line = receive_line(conn)
-        if line == "GROUPS_END":
+        if line == 'GROUPS_END':
             return items
         items.append(line)
 
@@ -94,3 +99,7 @@ def create_group(conn, name, members):
 def quit_client(conn):
     send_line(conn, "QUIT")
     assert receive_line(conn) == "OK bye"
+
+def assert_group_invited(conn, group_id, owner, name):
+    expected = 'EVENT GROUP_INVITED ' + str(group_id) + '|' + owner + '|' + name
+    assert receive_line(conn) == expected
