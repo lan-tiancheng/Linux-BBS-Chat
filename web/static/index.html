@@ -1,0 +1,248 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Linux BBS Chat</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <section class="auth-shell" id="loginShell">
+    <div class="auth-board">
+      <div class="auth-copy">
+        <p class="kicker">Linux Socket Demo</p>
+        <h1>BBS Chat</h1>
+        <p>账号、论坛、好友私聊、群聊、文件和备份集中展示。</p>
+        <div class="status-card" id="loginStatus">正在连接后端...</div>
+      </div>
+
+      <div class="auth-panels">
+        <form class="auth-card active" id="loginForm">
+          <div class="card-head">
+            <h2>登录</h2>
+            <button type="button" class="text-btn" id="showRegisterBtn">去注册</button>
+          </div>
+          <label>
+            <span>账号或昵称</span>
+            <input name="login" autocomplete="username" placeholder="9位账号或昵称" required>
+          </label>
+          <label>
+            <span>密码</span>
+            <input name="password" type="password" autocomplete="current-password" placeholder="数字和字母，至少7位" required>
+          </label>
+          <button type="submit">登录</button>
+        </form>
+
+        <form class="auth-card" id="registerForm">
+          <div class="card-head">
+            <h2>注册</h2>
+            <button type="button" class="text-btn" id="showLoginBtn">返回登录</button>
+          </div>
+          <label>
+            <span>账号</span>
+            <input name="account" inputmode="numeric" maxlength="9" autocomplete="username" placeholder="必须是9位数字" required>
+          </label>
+          <label>
+            <span>昵称</span>
+            <input name="nickname" maxlength="31" placeholder="昵称不能重复" required>
+          </label>
+          <label>
+            <span>密码</span>
+            <input name="password" type="password" autocomplete="new-password" placeholder="同时包含数字和字母，至少7位" required>
+          </label>
+          <button type="submit">注册账号</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <section class="app-shell hidden" id="appShell">
+    <header class="app-header">
+      <div>
+        <p class="kicker">BBS Chat Control Desk</p>
+        <h2>Linux BBS Chat</h2>
+      </div>
+      <div class="header-actions">
+        <div class="session-chip">
+          <span id="statusDot"></span>
+          <span id="sessionText">未登录</span>
+        </div>
+        <button class="danger" id="logoutBtn">退出登录</button>
+      </div>
+    </header>
+
+    <nav class="main-tabs" aria-label="主导航">
+      <div class="nav-brand">
+        <span class="brand-mark">LB</span>
+        <span>Linux BBS</span>
+      </div>
+      <button class="tab active" data-page="chatPage">Chat</button>
+      <button class="tab" data-page="bbsPage">BBS</button>
+      <button class="tab" data-page="toolsPage">Files</button>
+      <button class="tab notification-tab" data-page="notificationsPage">Notifications <span class="badge hidden" id="notificationBadge"></span></button>
+      <button class="tab" data-page="consolePage">Settings</button>
+    </nav>
+
+    <main class="page active" id="chatPage">
+      <section class="chat-layout">
+        <aside class="panel people-panel">
+          <div class="section-head">
+            <h3>关系</h3>
+            <button class="ghost small" id="refreshSocialBtn">刷新</button>
+          </div>
+          <div class="search-row">
+            <input id="userSearch" placeholder="搜索账号或昵称">
+            <button id="searchUserBtn">搜索</button>
+          </div>
+          <div id="searchResult" class="search-result"></div>
+
+          <h4>私信请求</h4>
+          <div class="list-stack" id="requestList"></div>
+
+          <h4>好友</h4>
+          <div class="list-stack" id="friendList"></div>
+        </aside>
+
+        <article class="panel message-panel">
+          <div class="section-head">
+            <div>
+              <h3 id="conversationTitle">选择会话</h3>
+              <p id="conversationHint">可从搜索结果、私信请求、好友或群列表进入会话。</p>
+            </div>
+            <button class="ghost small" id="historyBtn">聊天记录</button>
+          </div>
+          <div class="chat-view" id="chatFeed">
+            <div class="empty">暂无消息。</div>
+          </div>
+          <div class="compose-row">
+            <input id="messageInput" placeholder="输入消息">
+            <button id="sendMessageBtn">发送</button>
+          </div>
+        </article>
+
+        <aside class="panel group-panel">
+          <div class="section-head">
+            <h3>群聊</h3>
+            <button class="ghost small" id="refreshGroupsBtn">刷新</button>
+          </div>
+          <div class="group-create">
+            <input id="groupName" placeholder="群名">
+            <div id="groupFriendChecks" class="check-list"></div>
+            <button id="createGroupBtn">创建群聊</button>
+          </div>
+          <h4>我的群</h4>
+          <div class="list-stack" id="groupList"></div>
+        </aside>
+      </section>
+    </main>
+
+    <main class="page" id="bbsPage">
+      <section class="bbs-layout">
+        <aside class="panel posts-panel">
+          <div class="section-head">
+            <h3>帖子</h3>
+            <button class="ghost small" id="refreshPostsBtn">刷新</button>
+          </div>
+          <div class="posts-list" id="postList"></div>
+        </aside>
+
+        <article class="panel forum-panel">
+          <div class="forum-grid">
+            <section>
+              <h3>发帖</h3>
+              <input id="postTitle" placeholder="标题">
+              <textarea id="postContent" placeholder="正文"></textarea>
+              <div class="file-row">
+                <input id="postAttachmentName" placeholder="可选附件" readonly>
+                <label class="file-button">选择<input id="postAttachment" type="file"></label>
+                <button class="ghost small" id="clearPostAttachmentBtn">清空</button>
+              </div>
+              <button id="createPostBtn">发布帖子</button>
+            </section>
+
+            <section>
+              <h3>详情 / 回复</h3>
+              <div class="post-detail" id="postDetail">
+                <div class="empty">选择帖子查看详情。</div>
+              </div>
+              <textarea id="replyContent" placeholder="回复内容"></textarea>
+              <div class="file-row">
+                <input id="replyAttachmentName" placeholder="可选附件" readonly>
+                <label class="file-button">选择<input id="replyAttachment" type="file"></label>
+                <button class="ghost small" id="clearReplyAttachmentBtn">清空</button>
+              </div>
+              <button class="secondary" id="replyBtn">回复</button>
+            </section>
+          </div>
+        </article>
+      </section>
+    </main>
+
+    <main class="page" id="toolsPage">
+      <section class="tool-grid">
+        <article class="panel">
+          <h3>发送文件</h3>
+          <input id="chatFileTarget" placeholder="接收方账号或昵称">
+          <input id="chatFile" type="file">
+          <button id="chatUploadBtn">上传</button>
+        </article>
+        <article class="panel">
+          <h3>下载文件</h3>
+          <input id="downloadName" placeholder="文件名">
+          <button id="downloadBtn">下载聊天文件</button>
+        </article>
+        <article class="panel">
+          <h3>BBS 附件</h3>
+          <select id="bbsDownloadKind">
+            <option value="post">帖子附件</option>
+            <option value="reply">回复附件</option>
+          </select>
+          <input id="bbsDownloadId" placeholder="帖子或回复 ID">
+          <button id="bbsDownloadBtn">下载附件</button>
+        </article>
+        <article class="panel">
+          <h3>备份</h3>
+          <input id="backupLabel" placeholder="备份名称，例如 final">
+          <button id="backupBtn">创建备份</button>
+        </article>
+      </section>
+      <section class="panel downloads-card">
+        <h3>下载结果</h3>
+        <div id="downloads"></div>
+      </section>
+    </main>
+
+    <main class="page" id="notificationsPage">
+      <section class="panel notifications-panel">
+        <div class="section-head">
+          <h3>通知中心</h3>
+          <div class="inline-actions">
+            <button class="ghost small" id="refreshNotificationsBtn">刷新</button>
+            <button class="ghost small" id="markAllNotificationsBtn">全部已读</button>
+          </div>
+        </div>
+        <div class="notification-list" id="notificationList"></div>
+      </section>
+    </main>
+
+    <main class="page" id="consolePage">
+      <section class="panel">
+        <div class="section-head">
+          <h3>协议日志</h3>
+          <button class="ghost small" id="clearLogBtn">清空</button>
+        </div>
+        <div class="console" id="consoleLog"></div>
+      </section>
+    </main>
+
+    <footer class="app-status" id="appStatus">已连接。</footer>
+    <div class="toast-stack" id="toastStack" aria-live="polite" aria-atomic="false"></div>
+  </section>
+
+  <script src="/app.js"></script>
+</body>
+</html>
+
+
+
+
