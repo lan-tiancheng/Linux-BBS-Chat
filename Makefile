@@ -34,6 +34,7 @@ test: all
 	python3 tests/test_group_visibility_bridge.py
 	python3 tests/test_group_create_edges.py
 	python3 tests/test_group_message_permissions.py
+	python3 tests/test_group_concurrency.py
 	python3 tests/test_qt_bbs_protocol.py
 	python3 tests/test_web_gateway.py
 
