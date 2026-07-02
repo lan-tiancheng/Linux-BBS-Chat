@@ -8,6 +8,7 @@
 #include "user.h"
 
 #include <arpa/inet.h>
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <netinet/in.h>
@@ -452,6 +453,27 @@ static void copy_account(char *destination, size_t capacity,
     if (snprintf(destination, capacity, "%s", source) >= (int)capacity) {
         destination[0] = '\0';
     }
+}
+
+static char *trim_token(char *text)
+{
+    char *end;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    while (isspace((unsigned char)*text)) {
+        text++;
+    }
+    if (*text == '\0') {
+        return text;
+    }
+    end = text + strlen(text) - 1;
+    while (end > text && isspace((unsigned char)*end)) {
+        *end = '\0';
+        end--;
+    }
+    return text;
 }
 
 static int send_bbs_post_item(const BbsPostRecord *post, void *context)
@@ -1061,6 +1083,7 @@ static int handle_command(ClientSlot *client, char *line)
     if (strcmp(line, "GROUP_CREATE") == 0) {
         char *members_text;
         char *token;
+        char *saveptr = NULL;
         char member_storage[32][USER_ACCOUNT_LENGTH + 1];
         const char *member_accounts[32];
         char group_name[64];
@@ -1077,18 +1100,20 @@ static int handle_command(ClientSlot *client, char *line)
         }
         *members_text++ = '\0';
         copy_protocol_field(group_name, sizeof(group_name), argument);
-        token = strtok(members_text, ",");
+        token = strtok_r(members_text, ",", &saveptr);
         while (token != NULL && count < 32) {
             UserRecord member;
+            char *member_name = trim_token(token);
 
-            if (user_find(token, &member) > 0 &&
+            if (member_name != NULL && *member_name != '\0' &&
+                user_find(member_name, &member) > 0 &&
                 social_are_friends(client->username, member.account)) {
                 copy_account(member_storage[count], sizeof(member_storage[count]),
                              member.account);
                 member_accounts[count] = member_storage[count];
                 count++;
             }
-            token = strtok(NULL, ",");
+            token = strtok_r(NULL, ",", &saveptr);
         }
         if (count == 0) {
             return slot_send_line(client,
