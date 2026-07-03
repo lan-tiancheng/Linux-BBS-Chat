@@ -7,56 +7,61 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
-#include <QList>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QAbstractItemView>
 #include <QSplitter>
-#include <QSize>
 #include <QStatusBar>
 #include <QTabWidget>
 #include <QTextBrowser>
-#include <QTextEdit>
 #include <QTextCursor>
-#include <QTimer>
+#include <QTextEdit>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QSize>
 
-MainWindow::MainWindow(NetworkClient *client, const QString &username, QWidget *parent)
+MainWindow::MainWindow(NetworkClient *client, const QString &displayName, QWidget *parent)
     : QMainWindow(parent),
       m_client(client),
-      m_username(username),
+      m_displayName(displayName),
+      m_conversationKind(NoConversation),
+      m_currentGroupId(0),
       m_currentPostId(0),
-      m_chatPlaceholderVisible(false),
       m_bbsWorkTabs(nullptr),
       m_bbsDetailTabIndex(-1)
 {
-    setWindowTitle("BBS Chat - " + username);
-    resize(1120, 760);
+    setWindowTitle("BBS Chat - " + displayName);
+    resize(1180, 780);
 
     QTabWidget *tabs = new QTabWidget;
     tabs->setObjectName("MainTabs");
-    tabs->addTab(buildChatPage(), "聊天 Chat");
+    tabs->addTab(buildChatPage(), "私信 / 群聊");
     tabs->addTab(buildBbsPage(), "论坛 BBS");
     setCentralWidget(tabs);
 
-    m_statusLabel = new QLabel("已登录：" + username);
+    m_statusLabel = new QLabel("已登录：" + displayName);
     statusBar()->addWidget(m_statusLabel, 1);
 
     connect(m_client, &NetworkClient::statusMessage, this, &MainWindow::showStatus);
     connect(m_client, &NetworkClient::errorText, this, &MainWindow::showStatus);
-    connect(m_client, &NetworkClient::onlineUsersReceived, this, &MainWindow::updateOnlineUsers);
-    connect(m_client, &NetworkClient::groupMessageReceived, this, &MainWindow::appendGroupMessage);
+    connect(m_client, &NetworkClient::friendsReceived, this, &MainWindow::fillFriends);
+    connect(m_client, &NetworkClient::requestsReceived, this, &MainWindow::fillRequests);
+    connect(m_client, &NetworkClient::sentRequestsReceived, this, &MainWindow::fillSentRequests);
+    connect(m_client, &NetworkClient::groupsReceived, this, &MainWindow::fillGroups);
+    connect(m_client, &NetworkClient::notificationsReceived, this, &MainWindow::fillNotifications);
+    connect(m_client, &NetworkClient::searchUserReceived, this, &MainWindow::showSearchUser);
     connect(m_client, &NetworkClient::privateMessageReceived, this, &MainWindow::appendPrivateMessage);
+    connect(m_client, &NetworkClient::groupMessageReceived, this, &MainWindow::appendGroupMessage);
     connect(m_client, &NetworkClient::historyMessageReceived, this, &MainWindow::appendHistoryMessage);
     connect(m_client, &NetworkClient::bbsPostsReceived, this, &MainWindow::fillPosts);
     connect(m_client, &NetworkClient::bbsPostDetailReceived, this, &MainWindow::showPostDetail);
     connect(m_client, &NetworkClient::bbsOperationFinished, this, &MainWindow::onBbsOperation);
     connect(m_client, &NetworkClient::bbsDownloadFinished, this, &MainWindow::onBbsDownloadFinished);
 
-    refreshOnlineUsers();
-    QTimer::singleShot(200, this, &MainWindow::refreshPosts);
+    refreshSocial();
+    refreshPosts();
 }
 
 QWidget *MainWindow::buildChatPage()
@@ -64,76 +69,354 @@ QWidget *MainWindow::buildChatPage()
     QWidget *page = new QWidget;
     page->setObjectName("Page");
 
-    m_chatView = new QTextBrowser;
-    m_chatView->setObjectName("ChatView");
-    m_chatView->setOpenExternalLinks(false);
-    m_chatView->setHtml("<div class='empty'>登录成功。这里会显示历史群聊、历史私聊和实时消息。</div><br>");
-    m_chatPlaceholderVisible = true;
-
-    m_onlineList = new QListWidget;
-    m_onlineList->setObjectName("OnlineList");
-    connect(m_onlineList, &QListWidget::itemDoubleClicked, this, &MainWindow::setPrivateTargetFromList);
-
-    QLabel *onlineTitle = new QLabel("在线用户");
-    onlineTitle->setObjectName("PanelTitle");
+    m_userSearchEdit = new QLineEdit;
+    m_userSearchEdit->setPlaceholderText("搜索 9 位账号或昵称");
+    QPushButton *searchButton = new QPushButton("搜索");
     QPushButton *refreshButton = new QPushButton("刷新");
     refreshButton->setObjectName("GhostButton");
-    connect(refreshButton, &QPushButton::clicked, this, &MainWindow::refreshOnlineUsers);
+    connect(searchButton, &QPushButton::clicked, this, &MainWindow::searchUser);
+    connect(refreshButton, &QPushButton::clicked, this, &MainWindow::refreshSocial);
 
-    QHBoxLayout *onlineHeader = new QHBoxLayout;
-    onlineHeader->addWidget(onlineTitle);
-    onlineHeader->addStretch();
-    onlineHeader->addWidget(refreshButton);
+    QHBoxLayout *searchLayout = new QHBoxLayout;
+    searchLayout->addWidget(m_userSearchEdit, 1);
+    searchLayout->addWidget(searchButton);
+    searchLayout->addWidget(refreshButton);
+
+    m_conversationList = new QListWidget;
+    m_conversationList->setObjectName("OnlineList");
+    connect(m_conversationList, &QListWidget::itemClicked, this, &MainWindow::selectConversation);
+
+    m_groupNameEdit = new QLineEdit;
+    m_groupNameEdit->setPlaceholderText("群名");
+    m_groupFriendList = new QListWidget;
+    m_groupFriendList->setSelectionMode(QAbstractItemView::MultiSelection);
+    QPushButton *createGroupButton = new QPushButton("创建群聊");
+    createGroupButton->setObjectName("SecondaryButton");
+    connect(createGroupButton, &QPushButton::clicked, this, &MainWindow::createGroup);
 
     QFrame *sideCard = new QFrame;
     sideCard->setObjectName("SideCard");
     QVBoxLayout *sideLayout = new QVBoxLayout(sideCard);
-    sideLayout->addLayout(onlineHeader);
-    sideLayout->addWidget(m_onlineList, 1);
+    QLabel *sideTitle = new QLabel("会话");
+    sideTitle->setObjectName("PanelTitle");
+    QLabel *sideHint = new QLabel("搜索用户可发起首条私信；对方回复后自动成为好友。群聊只能从好友中创建。");
+    sideHint->setObjectName("HintText");
+    sideHint->setWordWrap(true);
+    sideLayout->addWidget(sideTitle);
+    sideLayout->addWidget(sideHint);
+    sideLayout->addLayout(searchLayout);
+    sideLayout->addWidget(m_conversationList, 3);
+    sideLayout->addWidget(new QLabel("从好友创建群聊"));
+    sideLayout->addWidget(m_groupNameEdit);
+    sideLayout->addWidget(m_groupFriendList, 1);
+    sideLayout->addWidget(createGroupButton);
+
+    m_conversationTitle = new QLabel("选择会话");
+    m_conversationTitle->setObjectName("PanelTitle");
+    m_chatView = new QTextBrowser;
+    m_chatView->setObjectName("ChatView");
+    m_chatView->setHtml("<style>"
+                         ".empty{padding:28px;color:#718575;text-align:center;}"
+                         ".bubble{max-width:72%;padding:10px 12px;border:1px solid #dbe8dc;"
+                         "border-radius:12px;background:#fff;margin:8px 0;}"
+                         ".me{margin-left:24%;background:#eaf7f1;}"
+                         ".private{border-color:#d8eadf;}.group{border-color:#eadcbf;}"
+                         ".history{opacity:.88}.time{color:#718575;font-size:12px;}"
+                         "</style><div class='empty'>从左侧选择好友、请求或群聊开始。</div>");
 
     m_messageEdit = new QLineEdit;
-    m_messageEdit->setPlaceholderText("输入群聊消息，回车发送");
-    QPushButton *sendGroupButton = new QPushButton("发送群聊");
-    connect(sendGroupButton, &QPushButton::clicked, this, &MainWindow::sendGroup);
-    connect(m_messageEdit, &QLineEdit::returnPressed, this, &MainWindow::sendGroup);
+    m_messageEdit->setPlaceholderText("输入消息，回车发送");
+    QPushButton *sendButton = new QPushButton("发送");
+    connect(sendButton, &QPushButton::clicked, this, &MainWindow::sendCurrentMessage);
+    connect(m_messageEdit, &QLineEdit::returnPressed, this, &MainWindow::sendCurrentMessage);
 
-    QHBoxLayout *groupLayout = new QHBoxLayout;
-    groupLayout->addWidget(m_messageEdit, 1);
-    groupLayout->addWidget(sendGroupButton);
-
-    m_privateTargetEdit = new QLineEdit;
-    m_privateTargetEdit->setPlaceholderText("私聊对象用户名");
-    QPushButton *sendPrivateButton = new QPushButton("发送私聊");
-    sendPrivateButton->setObjectName("SecondaryButton");
-    connect(sendPrivateButton, &QPushButton::clicked, this, &MainWindow::sendPrivate);
-
-    QHBoxLayout *privateLayout = new QHBoxLayout;
-    privateLayout->addWidget(m_privateTargetEdit, 0);
-    privateLayout->addWidget(sendPrivateButton, 0);
-
-    QLabel *chatTitle = new QLabel("消息流");
-    chatTitle->setObjectName("PanelTitle");
-    QLabel *chatTip = new QLabel("私聊会标记为【私聊】；给离线注册用户发送后，消息会保存到历史记录。");
-    chatTip->setObjectName("HintText");
+    QHBoxLayout *composeLayout = new QHBoxLayout;
+    composeLayout->addWidget(m_messageEdit, 1);
+    composeLayout->addWidget(sendButton);
 
     QFrame *chatCard = new QFrame;
     chatCard->setObjectName("ContentCard");
     QVBoxLayout *chatLayout = new QVBoxLayout(chatCard);
-    chatLayout->addWidget(chatTitle);
+    QLabel *chatTip = new QLabel("每个会话都会单独拉取历史记录；发送后立即显示本地消息。");
+    chatTip->setObjectName("HintText");
+    chatLayout->addWidget(m_conversationTitle);
     chatLayout->addWidget(chatTip);
     chatLayout->addWidget(m_chatView, 1);
-    chatLayout->addLayout(groupLayout);
-    chatLayout->addLayout(privateLayout);
+    chatLayout->addLayout(composeLayout);
 
     QSplitter *splitter = new QSplitter;
-    splitter->addWidget(chatCard);
     splitter->addWidget(sideCard);
-    splitter->setStretchFactor(0, 4);
-    splitter->setStretchFactor(1, 1);
+    splitter->addWidget(chatCard);
+    splitter->setStretchFactor(0, 1);
+    splitter->setStretchFactor(1, 2);
+    splitter->setSizes(QList<int>() << 360 << 780);
 
     QVBoxLayout *layout = new QVBoxLayout(page);
     layout->addWidget(splitter);
     return page;
+}
+
+void MainWindow::refreshSocial()
+{
+    m_client->refreshSocial();
+}
+
+void MainWindow::searchUser()
+{
+    m_client->searchUser(m_userSearchEdit->text());
+}
+
+void MainWindow::showSearchUser(const SocialUser &user)
+{
+    addConversationItem("搜索结果", user.nickname, user.account, PrivateConversation, user.account);
+    showStatus("已找到用户：" + user.nickname);
+}
+
+void MainWindow::fillFriends(const QVector<SocialUser> &friends)
+{
+    m_friends = friends;
+    rebuildConversationList();
+    rebuildGroupFriendList();
+}
+
+void MainWindow::fillRequests(const QVector<SocialUser> &requests)
+{
+    m_requests = requests;
+    rebuildConversationList();
+}
+
+void MainWindow::fillSentRequests(const QVector<SocialUser> &requests)
+{
+    m_sentRequests = requests;
+    rebuildConversationList();
+}
+
+void MainWindow::fillGroups(const QVector<GroupInfo> &groups)
+{
+    m_groups = groups;
+    rebuildConversationList();
+}
+
+void MainWindow::fillNotifications(const QVector<NotificationInfo> &notifications)
+{
+    int unread = 0;
+    for (const NotificationInfo &item : notifications) {
+        if (!item.read) {
+            ++unread;
+        }
+    }
+    if (unread > 0) {
+        showStatus(QString("有 %1 条未读通知").arg(unread));
+    }
+}
+
+void MainWindow::rebuildConversationList()
+{
+    m_conversationList->clear();
+    for (const SocialUser &request : m_requests) {
+        addConversationItem("私信请求", request.nickname, request.message,
+                            PrivateReplyConversation, request.account);
+    }
+    for (const SocialUser &request : m_sentRequests) {
+        addConversationItem("等待回复", request.nickname, request.message,
+                            PrivateConversation, request.account);
+    }
+    for (const SocialUser &friendUser : m_friends) {
+        addConversationItem("好友", friendUser.nickname, friendUser.account,
+                            PrivateConversation, friendUser.account);
+    }
+    for (const GroupInfo &group : m_groups) {
+        addConversationItem("群聊", group.name, QString("#%1").arg(group.id),
+                            GroupConversation, group.name, group.id);
+    }
+    if (m_conversationList->count() == 0) {
+        QListWidgetItem *item = new QListWidgetItem("暂无会话。搜索用户发送首条私信。");
+        item->setFlags(Qt::NoItemFlags);
+        m_conversationList->addItem(item);
+    }
+}
+
+void MainWindow::rebuildGroupFriendList()
+{
+    m_groupFriendList->clear();
+    for (const SocialUser &friendUser : m_friends) {
+        QListWidgetItem *item = new QListWidgetItem(friendUser.nickname + " (" + friendUser.account + ")");
+        item->setData(Qt::UserRole, friendUser.account);
+        m_groupFriendList->addItem(item);
+    }
+}
+
+void MainWindow::addConversationItem(const QString &section, const QString &title, const QString &subtitle,
+                                     ConversationKind kind, const QString &target, int groupId)
+{
+    QListWidgetItem *item = new QListWidgetItem(QString("[%1] %2\n%3").arg(section, title, subtitle));
+    item->setData(Qt::UserRole, int(kind));
+    item->setData(Qt::UserRole + 1, target);
+    item->setData(Qt::UserRole + 2, groupId);
+    item->setData(Qt::UserRole + 3, title);
+    m_conversationList->addItem(item);
+}
+
+void MainWindow::selectConversation(QListWidgetItem *item)
+{
+    if (!item || !(item->flags() & Qt::ItemIsEnabled)) {
+        return;
+    }
+    m_conversationKind = ConversationKind(item->data(Qt::UserRole).toInt());
+    m_currentTarget = item->data(Qt::UserRole + 1).toString();
+    m_currentGroupId = item->data(Qt::UserRole + 2).toInt();
+    m_currentTitle = item->data(Qt::UserRole + 3).toString();
+
+    if (m_conversationKind == GroupConversation) {
+        clearChatForSelection("群聊：" + m_currentTitle, QString("群 ID：%1").arg(m_currentGroupId));
+        m_client->requestGroupHistory(m_currentGroupId);
+    } else {
+        const QString hint = m_conversationKind == PrivateReplyConversation
+            ? "回复后双方会自动成为好友。"
+            : "非好友可以先发送一条消息，对方回复后成为好友。";
+        clearChatForSelection("私聊：" + m_currentTitle, hint);
+        m_client->requestPrivateHistory(m_currentTarget);
+    }
+    m_messageEdit->setFocus();
+}
+
+void MainWindow::clearChatForSelection(const QString &title, const QString &hint)
+{
+    m_conversationTitle->setText(title);
+    m_chatView->setHtml(QString("<style>"
+                                ".empty{padding:28px;color:#718575;text-align:center;}"
+                                ".bubble{max-width:72%;padding:10px 12px;border:1px solid #dbe8dc;"
+                                "border-radius:12px;background:#fff;margin:8px 0;}"
+                                ".me{margin-left:24%;background:#eaf7f1;}"
+                                ".private{border-color:#d8eadf;}.group{border-color:#eadcbf;}"
+                                ".history{opacity:.88}.time{color:#718575;font-size:12px;}"
+                                "</style><div class='empty'>%1<br>%2</div>")
+                        .arg(htmlEscape(title), htmlEscape(hint)));
+}
+
+void MainWindow::sendCurrentMessage()
+{
+    const QString text = m_messageEdit->text().trimmed();
+    if (text.isEmpty()) {
+        return;
+    }
+    if (m_conversationKind == NoConversation) {
+        QMessageBox::information(this, "发送消息", "请先从左侧选择一个私聊或群聊。");
+        return;
+    }
+    m_messageEdit->clear();
+    if (m_conversationKind == GroupConversation) {
+        appendGroupMessage(m_currentGroupId, m_client->currentAccount(), text);
+        m_client->sendGroupMessage(m_currentGroupId, text);
+    } else if (m_conversationKind == PrivateReplyConversation) {
+        appendPrivateMessage(m_currentTarget, text, false);
+        m_client->sendPrivateReply(m_currentTarget, text);
+    } else {
+        appendPrivateMessage(m_currentTarget, text, false);
+        m_client->sendPrivateStart(m_currentTarget, text);
+    }
+}
+
+void MainWindow::createGroup()
+{
+    QStringList members;
+    for (QListWidgetItem *item : m_groupFriendList->selectedItems()) {
+        members << item->data(Qt::UserRole).toString();
+    }
+    m_client->createGroup(m_groupNameEdit->text(), members);
+    m_groupNameEdit->clear();
+}
+
+void MainWindow::appendPrivateMessage(const QString &senderOrTarget, const QString &message, bool incoming)
+{
+    if (m_conversationKind != PrivateConversation &&
+        m_conversationKind != PrivateReplyConversation) {
+        showStatus("收到私信：" + peerName(senderOrTarget));
+        return;
+    }
+    if (incoming && senderOrTarget != m_currentTarget) {
+        showStatus("收到私信：" + peerName(senderOrTarget));
+        return;
+    }
+    const QString who = incoming ? peerName(senderOrTarget) : "我";
+    const QString cls = incoming ? "bubble private" : "bubble private me";
+    appendChatHtml(QString("<div class='%1'><b>%2</b><span class='time'> %3</span><br>%4</div>")
+                   .arg(cls, htmlEscape(who),
+                        QDateTime::currentDateTime().toString("HH:mm:ss"),
+                        htmlEscape(message)));
+}
+
+void MainWindow::appendGroupMessage(int groupId, const QString &sender, const QString &message)
+{
+    if (m_conversationKind != GroupConversation || groupId != m_currentGroupId) {
+        showStatus(QString("群聊 #%1 有新消息").arg(groupId));
+        return;
+    }
+    const QString who = sender == m_client->currentAccount() ? "我" : peerName(sender);
+    const QString cls = sender == m_client->currentAccount() ? "bubble group me" : "bubble group";
+    appendChatHtml(QString("<div class='%1'><b>%2</b><span class='time'> %3</span><br>%4</div>")
+                   .arg(cls, htmlEscape(who),
+                        QDateTime::currentDateTime().toString("HH:mm:ss"),
+                        htmlEscape(message)));
+}
+
+void MainWindow::appendHistoryMessage(const QString &kind, const QString &sender, const QString &recipient,
+                                      const QString &message, const QString &timestamp)
+{
+    if (kind == "GROUP") {
+        if (m_conversationKind != GroupConversation || recipient.toInt() != m_currentGroupId) {
+            return;
+        }
+        const QString who = sender == m_client->currentAccount() ? "我" : peerName(sender);
+        appendChatHtml(QString("<div class='bubble history'><b>%1</b><span class='time'> %2</span><br>%3</div>")
+                       .arg(htmlEscape(who), htmlEscape(timestamp), htmlEscape(message)));
+    } else {
+        const QString peer = sender == m_client->currentAccount() ? recipient : sender;
+        if ((m_conversationKind != PrivateConversation && m_conversationKind != PrivateReplyConversation) ||
+            peer != m_currentTarget) {
+            return;
+        }
+        const QString who = sender == m_client->currentAccount() ? "我" : peerName(sender);
+        appendChatHtml(QString("<div class='bubble history private'><b>%1</b><span class='time'> %2</span><br>%3</div>")
+                       .arg(htmlEscape(who), htmlEscape(timestamp), htmlEscape(message)));
+    }
+}
+
+void MainWindow::appendChatHtml(const QString &html)
+{
+    m_chatView->moveCursor(QTextCursor::End);
+    m_chatView->insertHtml(html);
+    m_chatView->insertHtml("<br><br>");
+    m_chatView->moveCursor(QTextCursor::End);
+}
+
+QString MainWindow::peerName(const QString &account) const
+{
+    if (account == m_client->currentAccount()) {
+        return "我";
+    }
+    for (const SocialUser &user : m_friends) {
+        if (user.account == account || user.nickname == account) {
+            return user.nickname;
+        }
+    }
+    for (const SocialUser &user : m_requests) {
+        if (user.account == account || user.nickname == account) {
+            return user.nickname;
+        }
+    }
+    for (const SocialUser &user : m_sentRequests) {
+        if (user.account == account || user.nickname == account) {
+            return user.nickname;
+        }
+    }
+    return account;
+}
+
+void MainWindow::showStatus(const QString &message)
+{
+    m_statusLabel->setText(message);
+    statusBar()->showMessage(message, 4500);
 }
 
 QWidget *MainWindow::buildBbsPage()
@@ -144,10 +427,10 @@ QWidget *MainWindow::buildBbsPage()
     m_postsList = new QListWidget;
     m_postsList->setObjectName("PostsList");
     m_postsList->setSpacing(8);
-    m_postsList->setMinimumWidth(300);
+    m_postsList->setMinimumWidth(310);
     connect(m_postsList, &QListWidget::itemClicked, this, &MainWindow::viewSelectedPost);
 
-    QLabel *listTitle = new QLabel("帖子广场");
+    QLabel *listTitle = new QLabel("社区讨论");
     listTitle->setObjectName("PanelTitle");
     QPushButton *refreshButton = new QPushButton("刷新");
     refreshButton->setObjectName("GhostButton");
@@ -165,14 +448,14 @@ QWidget *MainWindow::buildBbsPage()
     listLayout->addWidget(m_postsList, 1);
 
     m_titleEdit = new QLineEdit;
-    m_titleEdit->setPlaceholderText("帖子标题");
+    m_titleEdit->setPlaceholderText("写一个清楚的标题");
     m_contentEdit = new QTextEdit;
-    m_contentEdit->setPlaceholderText("帖子正文");
-    m_contentEdit->setMinimumHeight(260);
+    m_contentEdit->setPlaceholderText("补充正文内容");
+    m_contentEdit->setMinimumHeight(230);
     m_postAttachmentEdit = new QLineEdit;
-    m_postAttachmentEdit->setPlaceholderText("可选附件路径");
+    m_postAttachmentEdit->setPlaceholderText("可选附件");
     m_postAttachmentEdit->setReadOnly(true);
-    QPushButton *choosePostFile = new QPushButton("选择附件");
+    QPushButton *choosePostFile = new QPushButton("选择");
     choosePostFile->setObjectName("GhostButton");
     QPushButton *clearPostFile = new QPushButton("清空");
     clearPostFile->setObjectName("GhostButton");
@@ -189,12 +472,9 @@ QWidget *MainWindow::buildBbsPage()
     QFrame *createCard = new QFrame;
     createCard->setObjectName("ContentCard");
     QVBoxLayout *createLayout = new QVBoxLayout(createCard);
-    QLabel *createTitle = new QLabel("发布新帖子");
+    QLabel *createTitle = new QLabel("发布新帖");
     createTitle->setObjectName("PanelTitle");
-    QLabel *createTip = new QLabel("可以选择附件一起上传；附件只属于你发布的帖子。");
-    createTip->setObjectName("HintText");
     createLayout->addWidget(createTitle);
-    createLayout->addWidget(createTip);
     createLayout->addWidget(m_titleEdit);
     createLayout->addWidget(m_contentEdit, 1);
     createLayout->addLayout(postFileLayout);
@@ -208,21 +488,20 @@ QWidget *MainWindow::buildBbsPage()
     m_postDetail->setObjectName("PostDetail");
     m_postDetail->setOpenLinks(false);
     m_postDetail->setOpenExternalLinks(false);
-    m_postDetail->setMinimumHeight(430);
     connect(m_postDetail, &QTextBrowser::anchorClicked, this, &MainWindow::openBbsLink);
     renderEmptyDetail();
 
     m_replyEdit = new QTextEdit;
-    m_replyEdit->setPlaceholderText("选择帖子后，在这里写回复");
-    m_replyEdit->setMinimumHeight(110);
+    m_replyEdit->setPlaceholderText("写下回复内容");
+    m_replyEdit->setMinimumHeight(100);
     m_replyAttachmentEdit = new QLineEdit;
-    m_replyAttachmentEdit->setPlaceholderText("可选回复附件路径");
+    m_replyAttachmentEdit->setPlaceholderText("可选回复附件");
     m_replyAttachmentEdit->setReadOnly(true);
-    QPushButton *chooseReplyFile = new QPushButton("选择附件");
+    QPushButton *chooseReplyFile = new QPushButton("选择");
     chooseReplyFile->setObjectName("GhostButton");
     QPushButton *clearReplyFile = new QPushButton("清空");
     clearReplyFile->setObjectName("GhostButton");
-    QPushButton *replyButton = new QPushButton("回复帖子");
+    QPushButton *replyButton = new QPushButton("回复");
     replyButton->setObjectName("SecondaryButton");
     connect(chooseReplyFile, &QPushButton::clicked, this, &MainWindow::chooseReplyAttachment);
     connect(clearReplyFile, &QPushButton::clicked, this, &MainWindow::clearReplyAttachment);
@@ -233,27 +512,16 @@ QWidget *MainWindow::buildBbsPage()
     replyFileLayout->addWidget(chooseReplyFile);
     replyFileLayout->addWidget(clearReplyFile);
 
-    QFrame *replyCard = new QFrame;
-    replyCard->setObjectName("ComposeCard");
-    QVBoxLayout *replyLayout = new QVBoxLayout(replyCard);
-    QLabel *replyTitle = new QLabel("回复当前帖子");
-    replyTitle->setObjectName("PanelTitle");
-    QLabel *replyTip = new QLabel("回复附件只属于你自己的回复，别人不能给你的回复补附件。");
-    replyTip->setObjectName("HintText");
-    replyLayout->addWidget(replyTitle);
-    replyLayout->addWidget(replyTip);
-    replyLayout->addWidget(m_replyEdit);
-    replyLayout->addLayout(replyFileLayout);
-    replyLayout->addWidget(replyButton, 0, Qt::AlignRight);
-
     QFrame *detailCard = new QFrame;
     detailCard->setObjectName("ContentCard");
     QVBoxLayout *detailLayout = new QVBoxLayout(detailCard);
-    QLabel *detailTitle = new QLabel("帖子详情 / 回复");
+    QLabel *detailTitle = new QLabel("帖子详情");
     detailTitle->setObjectName("PanelTitle");
     detailLayout->addWidget(detailTitle);
     detailLayout->addWidget(m_postDetail, 1);
-    detailLayout->addWidget(replyCard);
+    detailLayout->addWidget(m_replyEdit);
+    detailLayout->addLayout(replyFileLayout);
+    detailLayout->addWidget(replyButton, 0, Qt::AlignRight);
 
     QWidget *detailPage = new QWidget;
     QVBoxLayout *detailPageLayout = new QVBoxLayout(detailPage);
@@ -264,14 +532,13 @@ QWidget *MainWindow::buildBbsPage()
     m_bbsWorkTabs->addTab(createPage, "发布帖子");
     m_bbsDetailTabIndex = m_bbsWorkTabs->addTab(detailPage, "查看 / 回复");
     m_bbsWorkTabs->setTabEnabled(m_bbsDetailTabIndex, false);
-    m_bbsWorkTabs->setCurrentIndex(0);
 
     QSplitter *splitter = new QSplitter;
     splitter->addWidget(listCard);
     splitter->addWidget(m_bbsWorkTabs);
     splitter->setStretchFactor(0, 1);
     splitter->setStretchFactor(1, 3);
-    splitter->setSizes(QList<int>() << 330 << 790);
+    splitter->setSizes(QList<int>() << 330 << 820);
 
     QVBoxLayout *layout = new QVBoxLayout(page);
     layout->addWidget(splitter);
@@ -287,158 +554,33 @@ QWidget *MainWindow::createPostCardWidget(const BbsPost &post) const
     layout->setSpacing(4);
 
     QString titleText = post.title.simplified();
-    if (titleText.size() > 22) {
-        titleText = titleText.left(22) + "...";
+    if (titleText.size() > 26) {
+        titleText = titleText.left(26) + "...";
     }
     QLabel *title = new QLabel(titleText);
     title->setObjectName("PostCardTitle");
     title->setTextFormat(Qt::PlainText);
-    title->setWordWrap(false);
 
     QString bodyText = post.content.simplified();
-    if (bodyText.size() > 38) {
-        bodyText = bodyText.left(38) + "...";
+    if (bodyText.size() > 44) {
+        bodyText = bodyText.left(44) + "...";
     }
     QLabel *body = new QLabel(bodyText);
     body->setObjectName("PostCardBody");
     body->setTextFormat(Qt::PlainText);
-    body->setWordWrap(false);
 
-    QString timeText = post.time;
-    if (timeText.size() > 16) {
-        timeText = timeText.left(16);
-    }
     QLabel *meta = new QLabel(QString("#%1 · %2 · %3%4")
                               .arg(post.id)
                               .arg(post.author)
-                              .arg(timeText)
-                              .arg(post.attachment == "none" || post.attachment.isEmpty() ? "" : " · 📎"));
+                              .arg(post.time)
+                              .arg(post.attachment == "none" || post.attachment.isEmpty() ? "" : " · 附件"));
     meta->setObjectName("PostCardMeta");
     meta->setTextFormat(Qt::PlainText);
-    meta->setWordWrap(false);
 
     layout->addWidget(title);
     layout->addWidget(body);
     layout->addWidget(meta);
     return card;
-}
-
-void MainWindow::sendGroup()
-{
-    const QString text = m_messageEdit->text().trimmed();
-    if (text.isEmpty()) {
-        return;
-    }
-    m_client->sendGroupMessage(text);
-    m_messageEdit->clear();
-}
-
-void MainWindow::sendPrivate()
-{
-    const QString target = m_privateTargetEdit->text().trimmed();
-    const QString text = m_messageEdit->text().trimmed();
-    if (target.isEmpty()) {
-        QMessageBox::information(this, "私聊", "请先填写私聊对象，或在右侧在线用户中双击选择。也可以手动输入已注册但离线的用户名。");
-        return;
-    }
-    if (target == m_username) {
-        QMessageBox::warning(this, "私聊", "不能私聊自己。请换一个用户。");
-        return;
-    }
-    if (text.isEmpty()) {
-        QMessageBox::information(this, "私聊", "请输入要发送的消息内容。");
-        return;
-    }
-    m_client->sendPrivateMessage(target, text);
-    m_messageEdit->clear();
-}
-
-void MainWindow::refreshOnlineUsers()
-{
-    m_client->requestOnlineUsers();
-}
-
-void MainWindow::setPrivateTargetFromList()
-{
-    QListWidgetItem *item = m_onlineList->currentItem();
-    if (!item) {
-        return;
-    }
-    const QString dataName = item->data(Qt::UserRole).toString();
-    const QString name = dataName.isEmpty() ? item->text().trimmed() : dataName;
-    if (name == m_username) {
-        QMessageBox::warning(this, "私聊", "不能私聊自己。列表里自己的名字只是用来显示在线状态。");
-        return;
-    }
-    m_privateTargetEdit->setText(name);
-    showStatus("私聊对象已设为：" + name);
-}
-
-void MainWindow::appendGroupMessage(const QString &sender, const QString &message)
-{
-    const QString now = QDateTime::currentDateTime().toString("HH:mm:ss");
-    appendChatHtml(QString("<div class='bubble group'><span class='tag'>【群聊】</span>"
-                           "<b>%1</b><span class='time'> %2</span><br>%3</div>")
-                   .arg(htmlEscape(sender), now, htmlEscape(message)));
-}
-
-void MainWindow::appendPrivateMessage(const QString &senderOrTarget, const QString &message, bool incoming)
-{
-    const QString now = QDateTime::currentDateTime().toString("HH:mm:ss");
-    const QString title = incoming
-        ? QString("%1 -> 我").arg(htmlEscape(senderOrTarget))
-        : QString("我 -> %1").arg(htmlEscape(senderOrTarget));
-    appendChatHtml(QString("<div class='bubble private'><span class='tag'>【私聊】</span>"
-                           "<b>%1</b><span class='time'> %2</span><br>%3</div>")
-                   .arg(title, now, htmlEscape(message)));
-}
-
-void MainWindow::appendHistoryMessage(const QString &kind, const QString &sender, const QString &recipient,
-                                      const QString &message, const QString &timestamp)
-{
-    if (kind == "GROUP") {
-        appendChatHtml(QString("<div class='bubble history'><span class='tag'>【历史群聊】</span>"
-                               "<b>%1</b><span class='time'> %2</span><br>%3</div>")
-                       .arg(htmlEscape(sender), htmlEscape(timestamp), htmlEscape(message)));
-    } else {
-        const QString title = recipient == m_username
-            ? QString("%1 -> 我").arg(htmlEscape(sender))
-            : QString("我 -> %1").arg(htmlEscape(recipient));
-        appendChatHtml(QString("<div class='bubble history private'><span class='tag'>【历史私聊】</span>"
-                               "<b>%1</b><span class='time'> %2</span><br>%3</div>")
-                       .arg(title, htmlEscape(timestamp), htmlEscape(message)));
-    }
-}
-
-void MainWindow::appendChatHtml(const QString &html)
-{
-    if (m_chatPlaceholderVisible) {
-        m_chatView->clear();
-        m_chatPlaceholderVisible = false;
-    }
-    m_chatView->moveCursor(QTextCursor::End);
-    m_chatView->insertHtml(html);
-    m_chatView->insertHtml("<br><br>");
-    m_chatView->moveCursor(QTextCursor::End);
-}
-
-void MainWindow::updateOnlineUsers(const QStringList &users)
-{
-    m_onlineList->clear();
-    for (const QString &user : users) {
-        QListWidgetItem *item = new QListWidgetItem(user);
-        if (user == m_username) {
-            item->setText(user + "  我");
-            item->setData(Qt::UserRole, user);
-        }
-        m_onlineList->addItem(item);
-    }
-}
-
-void MainWindow::showStatus(const QString &message)
-{
-    m_statusLabel->setText(message);
-    statusBar()->showMessage(message, 4500);
 }
 
 void MainWindow::refreshPosts()
@@ -468,7 +610,7 @@ void MainWindow::viewSelectedPost()
 void MainWindow::replyToPost()
 {
     if (m_currentPostId <= 0) {
-        QMessageBox::information(this, "回复", "请先在左侧选择一个帖子。");
+        QMessageBox::information(this, "回复", "请先选择一个帖子。");
         return;
     }
     m_client->replyPost(m_currentPostId, m_replyEdit->toPlainText(), m_replyAttachmentEdit->text());
@@ -485,7 +627,7 @@ void MainWindow::choosePostAttachment()
 void MainWindow::chooseReplyAttachment()
 {
     if (m_currentPostId <= 0) {
-        QMessageBox::information(this, "回复附件", "请先选择一个帖子，再给回复选择附件。");
+        QMessageBox::information(this, "回复附件", "请先选择一个帖子。");
         return;
     }
     const QString path = QFileDialog::getOpenFileName(this, "选择回复附件");
@@ -508,19 +650,14 @@ void MainWindow::openBbsLink(const QUrl &url)
 {
     const int id = bbsUrlId(url);
     if (id <= 0) {
-        QMessageBox::warning(this, "下载附件", "附件链接无效，无法下载。\n链接：" + url.toString());
+        QMessageBox::warning(this, "下载附件", "附件链接无效：" + url.toString());
         return;
     }
-
     const QString dir = downloadsDirectory();
     if (url.scheme() == "bbs-post") {
-        showStatus(QString("正在下载帖子附件 #%1 ...").arg(id));
         m_client->downloadBbsPostAttachment(id, dir);
     } else if (url.scheme() == "bbs-reply") {
-        showStatus(QString("正在下载回复附件 #%1 ...").arg(id));
         m_client->downloadBbsReplyAttachment(id, dir);
-    } else {
-        QMessageBox::warning(this, "下载附件", "不支持的附件链接：" + url.toString());
     }
 }
 
@@ -531,7 +668,7 @@ void MainWindow::fillPosts(const QVector<BbsPost> &posts)
     for (const BbsPost &post : posts) {
         QListWidgetItem *item = new QListWidgetItem;
         item->setData(Qt::UserRole, post.id);
-        item->setSizeHint(QSize(300, 86));
+        item->setSizeHint(QSize(310, 90));
         m_postsList->addItem(item);
         m_postsList->setItemWidget(item, createPostCardWidget(post));
     }
@@ -546,16 +683,15 @@ void MainWindow::showPostDetail(const BbsPost &post, const QVector<BbsReply> &re
     QString html;
     html += "<style>"
             "body{font-family:'Microsoft YaHei'; color:#213527;}"
-            ".post{background:#ffffff; border:1px solid #dbe8dc; border-radius:18px; padding:18px;}"
-            ".title{font-size:24px; font-weight:800; color:#213527;}"
-            ".meta{color:#7a8b7d; margin:8px 0 14px 0;}"
-            ".body{font-size:15px; line-height:160%; margin:14px 0 0 0;}"
-            ".fileline{margin:16px 0 0 0; padding:8px 10px; background:#eef8f1; border:1px solid #d7eadb; border-radius:10px; color:#16745a;}"
-            ".reply{background:#f7fbf7; border:1px solid #e4eee5; border-radius:14px; padding:12px; margin-top:12px;}"
+            ".post{background:#fff; border:1px solid #dbe8dc; border-radius:14px; padding:16px;}"
+            ".title{font-size:22px; font-weight:800; color:#213527;}"
+            ".meta{color:#718575; margin:8px 0 14px 0;}"
+            ".body{font-size:15px; line-height:165%; margin-top:12px;}"
+            ".fileline{margin-top:14px; padding:8px 10px; background:#eef8f1; border-radius:8px; color:#16745a;}"
+            ".reply{background:#f7fbf7; border:1px solid #e4eee5; border-radius:12px; padding:12px; margin-top:12px;}"
             ".reply-meta{color:#718575; font-size:12px; margin-bottom:5px;}"
-            ".reply-body{font-size:14px; line-height:155%; margin:6px 0 0 0;}"
+            ".reply-body{font-size:14px; line-height:155%;}"
             "a{color:#16745a; text-decoration:none; font-weight:700;}"
-            "h3{margin:18px 0 8px 0;}"
             "</style>";
     html += QString("<div class='post'><div class='title'>%1</div>")
             .arg(htmlEscape(post.title));
@@ -563,9 +699,9 @@ void MainWindow::showPostDetail(const BbsPost &post, const QVector<BbsReply> &re
             .arg(post.id)
             .arg(htmlEscape(post.author))
             .arg(htmlEscape(post.time));
-    html += QString("<p class='body'>%1</p>").arg(htmlEscape(post.content));
+    html += QString("<div class='body'>%1</div>").arg(htmlEscape(post.content));
     if (!post.attachment.isEmpty() && post.attachment != "none") {
-        html += QString("<p class='fileline'>📎 <a href=\"bbs-post:%1\">下载帖子附件：%2</a></p>")
+        html += QString("<div class='fileline'><a href=\"bbs-post:%1\">下载帖子附件：%2</a></div>")
                 .arg(post.id)
                 .arg(htmlEscape(post.attachment));
     }
@@ -578,9 +714,9 @@ void MainWindow::showPostDetail(const BbsPost &post, const QVector<BbsReply> &re
                 .arg(reply.id)
                 .arg(htmlEscape(reply.author))
                 .arg(htmlEscape(reply.time));
-        html += QString("<p class='reply-body'>%1</p>").arg(htmlEscape(reply.content));
+        html += QString("<div class='reply-body'>%1</div>").arg(htmlEscape(reply.content));
         if (!reply.attachment.isEmpty() && reply.attachment != "none") {
-            html += QString("<p class='fileline'>📎 <a href=\"bbs-reply:%1\">下载回复附件：%2</a></p>")
+            html += QString("<div class='fileline'><a href=\"bbs-reply:%1\">下载回复附件：%2</a></div>")
                     .arg(reply.id)
                     .arg(htmlEscape(reply.attachment));
         }
@@ -595,35 +731,29 @@ void MainWindow::onBbsOperation(const QString &message, bool ok)
     if (!ok) {
         return;
     }
-
-    const QString lower = message.toLower();
-
-    // 创建帖子/回复之后，如果还有附件要上传，NetworkClient 会继续发起上传请求。
-    // 这里先不刷新，等附件上传完成后再刷新，避免界面显示旧状态。
     if (message.contains("正在上传")) {
         return;
     }
-
-    const bool postCreated = lower.contains("bbs post created") || lower.contains("帖子已发布");
-    const bool replyCreated = lower.contains("bbs reply created") || lower.contains("回复已发布");
-    const bool replyFileUploaded = lower.contains("bbs reply file uploaded");
-    const bool postFileUploaded = lower.contains("bbs file uploaded") && !replyFileUploaded;
-
-    if (postCreated || postFileUploaded) {
+    const QString lower = message.toLower();
+    if (lower.contains("uploaded") || message.contains("上传")) {
+        refreshPosts();
+        if (m_currentPostId > 0) {
+            m_client->viewPost(m_currentPostId);
+        }
+        return;
+    }
+    if (lower.contains("post") || message.contains("帖子")) {
         m_titleEdit->clear();
         m_contentEdit->clear();
         m_postAttachmentEdit->clear();
         refreshPosts();
-        return;
     }
-
-    if (replyCreated || replyFileUploaded) {
+    if (lower.contains("reply") || message.contains("回复")) {
         m_replyEdit->clear();
         m_replyAttachmentEdit->clear();
         if (m_currentPostId > 0) {
             m_client->viewPost(m_currentPostId);
         }
-        return;
     }
 }
 
@@ -636,21 +766,7 @@ void MainWindow::onBbsDownloadFinished(const QString &path)
 int MainWindow::selectedPostId() const
 {
     QListWidgetItem *item = m_postsList->currentItem();
-    if (!item) {
-        return 0;
-    }
-    return item->data(Qt::UserRole).toInt();
-}
-
-BbsPost MainWindow::selectedPost() const
-{
-    const int id = selectedPostId();
-    for (const BbsPost &post : m_posts) {
-        if (post.id == id) {
-            return post;
-        }
-    }
-    return BbsPost();
+    return item ? item->data(Qt::UserRole).toInt() : 0;
 }
 
 QString MainWindow::htmlEscape(const QString &text) const
@@ -669,7 +785,7 @@ QString MainWindow::downloadsDirectory() const
 
 void MainWindow::renderEmptyDetail()
 {
-    m_postDetail->setHtml("<div style='padding:28px; color:#718575; font-size:15px;'>请先点击左侧帖子卡片。<br><br>打开详情后，可以在下方回复，也可以点击附件链接下载到当前 Qt 程序目录下的 downloads 文件夹。</div>");
+    m_postDetail->setHtml("<div style='padding:28px; color:#718575; font-size:15px;'>请选择左侧帖子查看详情。</div>");
 }
 
 int MainWindow::bbsUrlId(const QUrl &url)
@@ -679,14 +795,12 @@ int MainWindow::bbsUrlId(const QUrl &url)
     if (ok && id > 0) {
         return id;
     }
-
     QString text = url.path();
     text.remove('/');
     id = text.toInt(&ok);
     if (ok && id > 0) {
         return id;
     }
-
     text = url.toString();
     const int colon = text.indexOf(':');
     if (colon >= 0) {

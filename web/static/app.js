@@ -39,6 +39,20 @@ function clean(value) {
   return String(value || "").replace(/[|\r\n]/g, " ").trim();
 }
 
+function escapeHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function avatarText(value) {
+  const text = String(value || "?").trim();
+  return (text[0] || "?").toUpperCase();
+}
+
 function humanizeServerMessage(message) {
   const text = String(message || "").trim();
   const normalized = text.replace(/\s+/g, " ");
@@ -46,6 +60,8 @@ function humanizeServerMessage(message) {
     "ERR invalid account, password, or nickname": "账号、密码或昵称格式不正确",
     "ERR bad password": "密码错误，请重新输入",
     "ERR user not found": "未找到该用户，请检查账号或昵称",
+    "ERR user already logged in": "该账号已在其他窗口保持登录，请先退出原会话，或重启演示容器后再登录",
+    "ERR already logged in": "当前会话已经登录，请先退出后再切换账号",
     "ERR login required": "请先登录后再操作",
     "ERR account or nickname already exists": "账号或昵称已存在",
     "ERR group needs at least one friend": "创建群聊至少需要选择一位好友",
@@ -434,10 +450,24 @@ function renderActiveConversation() {
     return;
   }
   box.messages.forEach((item) => {
-    const div = document.createElement("div");
-    div.className = `bubble ${item.kind}${item.mine ? " me" : ""}`;
-    div.innerHTML = `<span class="tag">${item.title}</span>${item.time ? `<span class="time"> ${item.time}</span>` : ""}<br>${item.text}`;
-    feed.appendChild(div);
+    const row = document.createElement("div");
+    const avatar = document.createElement("div");
+    const bubble = document.createElement("div");
+    const meta = document.createElement("div");
+    const text = document.createElement("div");
+    row.className = `message-row ${item.mine ? "me" : "peer"}`;
+    avatar.className = "message-avatar";
+    avatar.textContent = avatarText(item.title);
+    bubble.className = `bubble ${item.kind}`;
+    meta.className = "message-meta";
+    meta.innerHTML = `<span>${escapeHtml(item.title)}</span>${item.time ? `<time>${escapeHtml(item.time)}</time>` : ""}`;
+    text.className = "message-text";
+    text.textContent = item.text;
+    bubble.appendChild(meta);
+    bubble.appendChild(text);
+    row.appendChild(avatar);
+    row.appendChild(bubble);
+    feed.appendChild(row);
   });
   feed.scrollTop = feed.scrollHeight;
 }
@@ -485,7 +515,13 @@ function personButton(person, actionText, onClick) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "person-row";
-  button.innerHTML = `<strong>${person.nickname}</strong><span>${person.account}</span><span>${actionText}</span>`;
+  button.innerHTML = `
+    <span class="row-avatar">${escapeHtml(avatarText(person.nickname || person.account))}</span>
+    <span class="row-main">
+      <strong>${escapeHtml(person.nickname)}</strong>
+      <span>${escapeHtml(actionText)}</span>
+    </span>
+    <span class="row-meta">${escapeHtml(person.account)}</span>`;
   button.addEventListener("click", onClick);
   return button;
 }
@@ -571,7 +607,13 @@ function renderGroups() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "group-row";
-    button.innerHTML = `<strong>${group.name}</strong><span>ID ${group.id}</span><span>点击进入群聊</span>`;
+    button.innerHTML = `
+      <span class="row-avatar group-avatar">${escapeHtml(avatarText(group.name))}</span>
+      <span class="row-main">
+        <strong>${escapeHtml(group.name)}</strong>
+        <span>点击进入群聊</span>
+      </span>
+      <span class="row-meta">#${escapeHtml(group.id)}</span>`;
     button.addEventListener("click", () => selectGroup(group.id, group.name));
     $("groupList").appendChild(button);
   });
@@ -593,9 +635,14 @@ function renderPosts() {
     const hasAttachment = post.attachment && post.attachment !== "none";
     const replies = post.replies ? `${post.replies} 回复` : "回复 --";
     card.innerHTML = `
-      <strong class="post-title">${title}</strong>
-      <span class="post-excerpt">${body || "无正文预览"}</span>
-      <span class="post-meta">#${post.id} · ${post.author || "unknown"} · ${post.time || "时间未知"}</span>
+      <span class="post-card-top">
+        <span class="row-avatar post-avatar">${escapeHtml(avatarText(post.author))}</span>
+        <span class="post-title-wrap">
+          <strong class="post-title">${escapeHtml(title)}</strong>
+          <span class="post-meta">#${post.id} · ${escapeHtml(post.author || "unknown")} · ${escapeHtml(post.time || "时间未知")}</span>
+        </span>
+      </span>
+      <span class="post-excerpt">${escapeHtml(body || "无正文预览")}</span>
       <span class="post-badges">
         <span class="pill primary">${replies}</span>
         <span class="pill ${hasAttachment ? "primary" : "muted"}">${hasAttachment ? "有附件" : "无附件"}</span>
@@ -622,12 +669,21 @@ function renderDetail() {
     card.classList.toggle("active", Number(card.dataset.id) === currentPostId);
   });
   const postBlock = document.createElement("div");
-  postBlock.className = "bubble";
+  postBlock.className = "detail-post";
   const postLink =
     post.attachment !== "none"
       ? `<br><a href="#" data-download-post="${post.id}">下载帖子附件：${post.attachment}</a>`
       : "";
-  postBlock.innerHTML = `<b>#${post.id} ${post.title}</b><span class="time"> ${authorLink(post.author)} · ${post.time}</span><br>${post.content}${postLink}`;
+  postBlock.innerHTML = `
+    <div class="detail-head">
+      <span class="row-avatar post-avatar">${escapeHtml(avatarText(post.author))}</span>
+      <div>
+        <b>#${post.id} ${escapeHtml(post.title)}</b>
+        <span class="time">${authorLink(post.author)} · ${escapeHtml(post.time)}</span>
+      </div>
+    </div>
+    <div class="detail-body">${escapeHtml(post.content)}</div>
+    ${postLink}`;
   $("postDetail").appendChild(postBlock);
 
   const replies = detailRows.filter((line) => line.startsWith("BBS_REPLY ")).map(parseBbsReply);
@@ -636,12 +692,21 @@ function renderDetail() {
   } else {
     replies.forEach((reply) => {
       const div = document.createElement("div");
-      div.className = "bubble history";
+      div.className = "reply-item";
       const link =
         reply.attachment !== "none"
           ? `<br><a href="#" data-download-reply="${reply.id}">下载回复附件：${reply.attachment}</a>`
           : "";
-      div.innerHTML = `<b>回复 #${reply.id}</b><span class="time"> ${authorLink(reply.author)} · ${reply.time}</span><br>${reply.content}${link}`;
+      div.innerHTML = `
+        <div class="detail-head">
+          <span class="row-avatar">${escapeHtml(avatarText(reply.author))}</span>
+          <div>
+            <b>回复 #${reply.id}</b>
+            <span class="time">${authorLink(reply.author)} · ${escapeHtml(reply.time)}</span>
+          </div>
+        </div>
+        <div class="detail-body">${escapeHtml(reply.content)}</div>
+        ${link}`;
       $("postDetail").appendChild(div);
     });
   }

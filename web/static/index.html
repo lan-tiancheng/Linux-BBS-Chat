@@ -12,7 +12,7 @@
       <div class="auth-copy">
         <p class="kicker">Linux Socket Demo</p>
         <h1>BBS Chat</h1>
-        <p>账号、论坛、好友私聊、群聊、文件和备份集中展示。</p>
+        <p>面向课程验收的社区与即时通讯演示台。</p>
         <div class="status-card" id="loginStatus">正在连接后端...</div>
       </div>
 
@@ -59,7 +59,7 @@
   <section class="app-shell hidden" id="appShell">
     <header class="app-header">
       <div>
-        <p class="kicker">BBS Chat Control Desk</p>
+        <p class="kicker">Community Workspace</p>
         <h2>Linux BBS Chat</h2>
       </div>
       <div class="header-actions">
@@ -76,22 +76,22 @@
         <span class="brand-mark">LB</span>
         <span>Linux BBS</span>
       </div>
-      <button class="tab active" data-page="chatPage">Chat</button>
-      <button class="tab" data-page="bbsPage">BBS</button>
-      <button class="tab" data-page="toolsPage">Files</button>
-      <button class="tab notification-tab" data-page="notificationsPage">Notifications <span class="badge hidden" id="notificationBadge"></span></button>
-      <button class="tab" data-page="consolePage">Settings</button>
+      <button class="tab active" data-page="chatPage"><span>私信</span></button>
+      <button class="tab" data-page="bbsPage"><span>论坛</span></button>
+      <button class="tab" data-page="toolsPage"><span>文件</span></button>
+      <button class="tab notification-tab" data-page="notificationsPage"><span>通知</span><span class="badge hidden" id="notificationBadge"></span></button>
+      <button class="tab" data-page="consolePage"><span>日志</span></button>
     </nav>
 
     <main class="page active" id="chatPage">
       <section class="chat-layout">
         <aside class="panel people-panel">
           <div class="section-head">
-            <h3>关系</h3>
+            <h3>联系人</h3>
             <button class="ghost small" id="refreshSocialBtn">刷新</button>
           </div>
           <div class="search-row">
-            <input id="userSearch" placeholder="搜索账号或昵称">
+            <input id="userSearch" placeholder="搜索账号 / 昵称">
             <button id="searchUserBtn">搜索</button>
           </div>
           <div id="searchResult" class="search-result"></div>
@@ -107,7 +107,7 @@
           <div class="section-head">
             <div>
               <h3 id="conversationTitle">选择会话</h3>
-              <p id="conversationHint">可从搜索结果、私信请求、好友或群列表进入会话。</p>
+              <p id="conversationHint">从联系人、私信请求或群聊进入一个独立对话框。</p>
             </div>
             <button class="ghost small" id="historyBtn">聊天记录</button>
           </div>
@@ -115,7 +115,7 @@
             <div class="empty">暂无消息。</div>
           </div>
           <div class="compose-row">
-            <input id="messageInput" placeholder="输入消息">
+            <input id="messageInput" placeholder="输入消息，Enter 发送">
             <button id="sendMessageBtn">发送</button>
           </div>
         </article>
@@ -140,7 +140,7 @@
       <section class="bbs-layout">
         <aside class="panel posts-panel">
           <div class="section-head">
-            <h3>帖子</h3>
+            <h3>社区讨论</h3>
             <button class="ghost small" id="refreshPostsBtn">刷新</button>
           </div>
           <div class="posts-list" id="postList"></div>
@@ -149,9 +149,9 @@
         <article class="panel forum-panel">
           <div class="forum-grid">
             <section>
-              <h3>发帖</h3>
-              <input id="postTitle" placeholder="标题">
-              <textarea id="postContent" placeholder="正文"></textarea>
+              <h3>发布新帖</h3>
+              <input id="postTitle" placeholder="写一个清楚的标题">
+              <textarea id="postContent" placeholder="补充正文内容"></textarea>
               <div class="file-row">
                 <input id="postAttachmentName" placeholder="可选附件" readonly>
                 <label class="file-button">选择<input id="postAttachment" type="file"></label>
@@ -161,11 +161,11 @@
             </section>
 
             <section>
-              <h3>详情 / 回复</h3>
+              <h3>帖子详情</h3>
               <div class="post-detail" id="postDetail">
                 <div class="empty">选择帖子查看详情。</div>
               </div>
-              <textarea id="replyContent" placeholder="回复内容"></textarea>
+              <textarea id="replyContent" placeholder="写下回复内容"></textarea>
               <div class="file-row">
                 <input id="replyAttachmentName" placeholder="可选附件" readonly>
                 <label class="file-button">选择<input id="replyAttachment" type="file"></label>

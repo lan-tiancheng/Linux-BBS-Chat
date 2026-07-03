@@ -2,7 +2,6 @@
 
 #include <QDir>
 #include <QFileInfo>
-#include <QHostAddress>
 #include <QRegExp>
 #include <QTimer>
 
@@ -10,8 +9,14 @@ NetworkClient::NetworkClient(QObject *parent)
     : QObject(parent),
       m_socket(new QTcpSocket(this)),
       m_pending(PendingNone),
+      m_groupTargetId(0),
       m_downloadFile(nullptr),
-      m_downloadBytesLeft(0)
+      m_downloadBytesLeft(0),
+      m_collectingFriends(false),
+      m_collectingRequests(false),
+      m_collectingSentRequests(false),
+      m_collectingGroups(false),
+      m_collectingNotifications(false)
 {
     connect(m_socket, &QTcpSocket::connected, this, &NetworkClient::connected);
     connect(m_socket, &QTcpSocket::disconnected, this, &NetworkClient::disconnected);
@@ -33,9 +38,22 @@ bool NetworkClient::isConnected() const
     return m_socket->state() == QAbstractSocket::ConnectedState;
 }
 
-QString NetworkClient::currentUser() const
+QString NetworkClient::currentAccount() const
 {
-    return m_currentUser;
+    return m_currentAccount;
+}
+
+QString NetworkClient::currentNickname() const
+{
+    return m_currentNickname;
+}
+
+QString NetworkClient::displayName() const
+{
+    if (m_currentNickname.isEmpty()) {
+        return m_currentAccount;
+    }
+    return QString("%1 (%2)").arg(m_currentNickname, m_currentAccount);
 }
 
 void NetworkClient::connectToServer(const QString &host, quint16 port)
@@ -50,12 +68,12 @@ void NetworkClient::connectToServer(const QString &host, quint16 port)
 void NetworkClient::disconnectFromServer()
 {
     if (isConnected()) {
-        sendLine("QUIT");
+        logout();
         m_socket->disconnectFromHost();
     }
 }
 
-void NetworkClient::login(const QString &username, const QString &password)
+void NetworkClient::login(const QString &loginName, const QString &password)
 {
     if (!isConnected()) {
         emit loginFailed("尚未连接服务器");
@@ -64,11 +82,11 @@ void NetworkClient::login(const QString &username, const QString &password)
     if (!startPending(PendingLogin)) {
         return;
     }
-    m_loginUser = username.trimmed();
-    sendLine(QString("LOGIN %1 %2").arg(cleanLineText(username), cleanLineText(password)));
+    m_loginName = loginName.trimmed();
+    sendLine(QString("LOGIN %1 %2").arg(cleanLineText(loginName), cleanLineText(password)));
 }
 
-void NetworkClient::registerUser(const QString &username, const QString &password)
+void NetworkClient::registerUser(const QString &account, const QString &password, const QString &nickname)
 {
     if (!isConnected()) {
         emit registerFailed("尚未连接服务器");
@@ -77,36 +95,63 @@ void NetworkClient::registerUser(const QString &username, const QString &passwor
     if (!startPending(PendingRegister)) {
         return;
     }
-    sendLine(QString("REGISTER %1 %2").arg(cleanLineText(username), cleanLineText(password)));
+    sendLine(QString("REGISTER %1 %2 %3")
+             .arg(cleanLineText(account), cleanLineText(password), cleanLineText(nickname)));
 }
 
-void NetworkClient::requestOnlineUsers()
+void NetworkClient::logout()
 {
-    if (!startPending(PendingWho)) {
+    if (isConnected()) {
+        sendLine("LOGOUT");
+    }
+    m_currentAccount.clear();
+    m_currentNickname.clear();
+}
+
+void NetworkClient::refreshSocial()
+{
+    sendLine("FRIENDS");
+    sendLine("REQUESTS");
+    sendLine("SENT_REQUESTS");
+    sendLine("GROUPS");
+    sendLine("NOTIFICATIONS");
+}
+
+void NetworkClient::searchUser(const QString &loginName)
+{
+    const QString value = cleanLineText(loginName).trimmed();
+    if (value.isEmpty()) {
+        emit statusMessage("请先输入账号或昵称");
         return;
     }
-    sendLine("WHO");
+    sendLine(QString("SEARCH_USER %1").arg(value));
 }
 
-void NetworkClient::sendGroupMessage(const QString &message)
+void NetworkClient::requestPrivateHistory(const QString &accountOrNickname)
 {
-    const QString text = cleanLineText(message).trimmed();
-    if (text.isEmpty()) {
-        return;
+    const QString value = cleanLineText(accountOrNickname).trimmed();
+    if (!value.isEmpty()) {
+        sendLine(QString("HISTORY_PRIVATE %1").arg(value));
     }
-    sendLine("GROUP " + text);
 }
 
-void NetworkClient::sendPrivateMessage(const QString &target, const QString &message)
+void NetworkClient::requestGroupHistory(int groupId)
+{
+    if (groupId > 0) {
+        sendLine(QString("HISTORY_GROUP %1").arg(groupId));
+    }
+}
+
+void NetworkClient::sendPrivateStart(const QString &target, const QString &message)
 {
     const QString user = cleanLineText(target).trimmed();
     const QString text = cleanLineText(message).trimmed();
     if (user.isEmpty() || text.isEmpty()) {
-        emit statusMessage("私聊需要填写目标用户和消息内容");
+        emit statusMessage("私聊需要目标用户和消息内容");
         return;
     }
-    if (!m_currentUser.isEmpty() && user == m_currentUser) {
-        emit statusMessage("不能私聊自己");
+    if (user == m_currentAccount || user == m_currentNickname) {
+        emit statusMessage("不能给自己发私聊");
         return;
     }
     if (!startPending(PendingPrivate)) {
@@ -114,7 +159,63 @@ void NetworkClient::sendPrivateMessage(const QString &target, const QString &mes
     }
     m_privateTarget = user;
     m_privateMessage = text;
-    sendLine(QString("PRIVATE %1 %2").arg(user, text));
+    sendLine(QString("PRIVATE_START %1 %2").arg(user, text));
+}
+
+void NetworkClient::sendPrivateReply(const QString &target, const QString &message)
+{
+    const QString user = cleanLineText(target).trimmed();
+    const QString text = cleanLineText(message).trimmed();
+    if (user.isEmpty() || text.isEmpty()) {
+        emit statusMessage("回复私信需要目标用户和消息内容");
+        return;
+    }
+    if (!startPending(PendingPrivate)) {
+        return;
+    }
+    m_privateTarget = user;
+    m_privateMessage = text;
+    sendLine(QString("PRIVATE_REPLY %1 %2").arg(user, text));
+}
+
+void NetworkClient::createGroup(const QString &name, const QStringList &members)
+{
+    const QString groupName = cleanLineText(name).trimmed();
+    QStringList cleanMembers;
+    for (const QString &member : members) {
+        const QString value = cleanLineText(member).trimmed();
+        if (!value.isEmpty()) {
+            cleanMembers << value;
+        }
+    }
+    if (groupName.isEmpty() || cleanMembers.isEmpty()) {
+        emit statusMessage("创建群聊需要群名和至少一位好友");
+        return;
+    }
+    if (!startPending(PendingGroupCreate)) {
+        return;
+    }
+    sendLine(QString("GROUP_CREATE %1 %2").arg(groupName, cleanMembers.join(",")));
+}
+
+void NetworkClient::sendGroupMessage(int groupId, const QString &message)
+{
+    const QString text = cleanLineText(message).trimmed();
+    if (groupId <= 0 || text.isEmpty()) {
+        emit statusMessage("请先选择群聊并输入消息");
+        return;
+    }
+    if (!startPending(PendingGroupSend)) {
+        return;
+    }
+    m_groupTargetId = groupId;
+    m_groupMessage = text;
+    sendLine(QString("GROUP_SEND %1 %2").arg(groupId).arg(text));
+}
+
+void NetworkClient::markAllNotificationsRead()
+{
+    sendLine("MARK_READ_ALL");
 }
 
 void NetworkClient::listPosts()
@@ -228,7 +329,7 @@ bool NetworkClient::sendLine(const QString &line)
 bool NetworkClient::startPending(PendingKind kind)
 {
     if (m_pending != PendingNone) {
-        emit statusMessage("上一个请求还没有完成，请稍后再试");
+        emit statusMessage("上一项请求还没有完成，请稍后再试");
         return false;
     }
     m_pending = kind;
@@ -281,52 +382,20 @@ void NetworkClient::handleLine(const QString &line)
     if (line.isEmpty()) {
         return;
     }
-    if (handleAsyncLine(line)) {
+    if (handleCollectionLine(line) || handleAsyncLine(line)) {
         return;
     }
 
     switch (m_pending) {
     case PendingLogin:
     case PendingRegister:
+    case PendingPrivate:
+    case PendingGroupCreate:
+    case PendingGroupSend:
     case PendingBbsCreate:
     case PendingBbsReply:
     case PendingBbsUpload:
         handleSingleLineResult(line, m_pending);
-        return;
-    case PendingWho:
-        if (line.startsWith("ONLINE ")) {
-            const QStringList parts = line.split(' ', QString::SkipEmptyParts);
-            QStringList users;
-            for (int i = 2; i < parts.size(); ++i) {
-                users << parts.at(i);
-            }
-            emit onlineUsersReceived(users);
-        } else if (line.startsWith("ERR ")) {
-            emit statusMessage(line.mid(4));
-        }
-        finishPending();
-        return;
-    case PendingPrivate:
-        if (line.startsWith("OK")) {
-            emit privateMessageReceived(m_privateTarget, m_privateMessage, false);
-            if (line.contains("stored", Qt::CaseInsensitive) || line.contains("offline", Qt::CaseInsensitive)) {
-                emit statusMessage("私聊已保存，对方上线后可以看到");
-            } else {
-                emit statusMessage("私聊已发送");
-            }
-        } else if (line.startsWith("ERR ")) {
-            const QString error = line.mid(4);
-            if (error.contains("does not exist", Qt::CaseInsensitive) || error.contains("not registered", Qt::CaseInsensitive)) {
-                emit statusMessage("私聊失败：用户不存在");
-            } else if (error.contains("yourself", Qt::CaseInsensitive)) {
-                emit statusMessage("私聊失败：不能私聊自己");
-            } else {
-                emit statusMessage("私聊失败：" + error);
-            }
-        } else {
-            emit statusMessage(line);
-        }
-        finishPending();
         return;
     case PendingBbsList:
         m_pendingLines << line;
@@ -373,14 +442,90 @@ void NetworkClient::handleLine(const QString &line)
     }
 }
 
+bool NetworkClient::handleCollectionLine(const QString &line)
+{
+    if (line == "FRIENDS_BEGIN") {
+        m_collectingFriends = true;
+        m_friends.clear();
+        return true;
+    }
+    if (line == "FRIENDS_END") {
+        m_collectingFriends = false;
+        emit friendsReceived(m_friends);
+        return true;
+    }
+    if (m_collectingFriends && line.startsWith("FRIEND ")) {
+        m_friends << parseSocialUser(line.mid(7));
+        return true;
+    }
+
+    if (line == "REQUESTS_BEGIN") {
+        m_collectingRequests = true;
+        m_requests.clear();
+        return true;
+    }
+    if (line == "REQUESTS_END") {
+        m_collectingRequests = false;
+        emit requestsReceived(m_requests);
+        return true;
+    }
+    if (m_collectingRequests && line.startsWith("REQUEST ")) {
+        m_requests << parseSocialUser(line.mid(8));
+        return true;
+    }
+
+    if (line == "SENT_REQUESTS_BEGIN") {
+        m_collectingSentRequests = true;
+        m_sentRequests.clear();
+        return true;
+    }
+    if (line == "SENT_REQUESTS_END") {
+        m_collectingSentRequests = false;
+        emit sentRequestsReceived(m_sentRequests);
+        return true;
+    }
+    if (m_collectingSentRequests && line.startsWith("SENT_REQUEST ")) {
+        m_sentRequests << parseSocialUser(line.mid(13));
+        return true;
+    }
+
+    if (line == "GROUPS_BEGIN") {
+        m_collectingGroups = true;
+        m_groups.clear();
+        return true;
+    }
+    if (line == "GROUPS_END") {
+        m_collectingGroups = false;
+        emit groupsReceived(m_groups);
+        return true;
+    }
+    if (m_collectingGroups && line.startsWith("GROUP_ITEM ")) {
+        m_groups << parseGroupLine(line.mid(11));
+        return true;
+    }
+
+    if (line == "NOTIFICATIONS_BEGIN") {
+        m_collectingNotifications = true;
+        m_notifications.clear();
+        return true;
+    }
+    if (line == "NOTIFICATIONS_END") {
+        m_collectingNotifications = false;
+        emit notificationsReceived(m_notifications);
+        return true;
+    }
+    if (m_collectingNotifications && line.startsWith("NOTIFICATION ")) {
+        m_notifications << parseNotificationLine(line.mid(13));
+        return true;
+    }
+
+    return false;
+}
+
 bool NetworkClient::handleAsyncLine(const QString &line)
 {
-    if (line.startsWith("MSG ")) {
-        const QString body = line.mid(4);
-        const int space = body.indexOf(' ');
-        if (space > 0) {
-            emit groupMessageReceived(body.left(space), body.mid(space + 1));
-        }
+    if (line.startsWith("USER ")) {
+        emit searchUserReceived(parseSocialUser(line.mid(5)));
         return true;
     }
     if (line.startsWith("PMSG ")) {
@@ -388,33 +533,59 @@ bool NetworkClient::handleAsyncLine(const QString &line)
         const int space = body.indexOf(' ');
         if (space > 0) {
             emit privateMessageReceived(body.left(space), body.mid(space + 1), true);
+            refreshSocial();
         }
         return true;
     }
-    if (line.startsWith("HMSG ")) {
-        const QString data = line.mid(5);
-        const int p1 = data.indexOf('|');
-        const int p2 = p1 < 0 ? -1 : data.indexOf('|', p1 + 1);
-        if (p1 > 0 && p2 > p1) {
-            emit historyMessageReceived("GROUP", data.mid(p1 + 1, p2 - p1 - 1), QString(), data.mid(p2 + 1), data.left(p1));
+    if (line.startsWith("GMSG ")) {
+        const QString body = line.mid(5);
+        const int first = body.indexOf(' ');
+        const int second = first < 0 ? -1 : body.indexOf(' ', first + 1);
+        if (first > 0 && second > first) {
+            const QString sender = body.mid(first + 1, second - first - 1);
+            if (sender != m_currentAccount) {
+                emit groupMessageReceived(body.left(first).toInt(), sender, body.mid(second + 1));
+            }
         }
         return true;
     }
     if (line.startsWith("HPMSG ")) {
         const QString data = line.mid(6);
-        const int p1 = data.indexOf('|');
-        const int p2 = p1 < 0 ? -1 : data.indexOf('|', p1 + 1);
-        const int p3 = p2 < 0 ? -1 : data.indexOf('|', p2 + 1);
-        if (p1 > 0 && p2 > p1 && p3 > p2) {
-            emit historyMessageReceived("PRIVATE", data.mid(p1 + 1, p2 - p1 - 1), data.mid(p2 + 1, p3 - p2 - 1), data.mid(p3 + 1), data.left(p1));
+        const QStringList parts = data.split('|');
+        if (parts.size() >= 4) {
+            emit historyMessageReceived("PRIVATE", parts.at(1), parts.at(2),
+                                        parts.mid(3).join("|"), parts.at(0));
         }
         return true;
     }
-    if (line == "HISTORY_BEGIN" || line == "HISTORY_END") {
+    if (line.startsWith("HGMSG ")) {
+        const QString data = line.mid(6);
+        const QStringList parts = data.split('|');
+        if (parts.size() >= 4) {
+            emit historyMessageReceived("GROUP", parts.at(2), parts.at(1),
+                                        parts.mid(3).join("|"), parts.at(0));
+        }
+        return true;
+    }
+    if (line == "PRIVATE_HISTORY_BEGIN" || line == "PRIVATE_HISTORY_END" ||
+        line == "GROUP_HISTORY_BEGIN" || line == "GROUP_HISTORY_END") {
+        return true;
+    }
+    if (line.startsWith("EVENT GROUP_INVITED ")) {
+        emit statusMessage("收到群聊邀请：" + line.mid(20));
+        refreshSocial();
+        return true;
+    }
+    if (line.startsWith("EVENT BBS_POST_CREATED ") ||
+        line.startsWith("EVENT BBS_REPLY_CREATED ")) {
+        emit statusMessage("论坛有新动态：" + line.mid(6));
+        listPosts();
+        refreshSocial();
         return true;
     }
     if (line.startsWith("FILE_READY ")) {
         emit statusMessage("收到聊天文件提醒：" + line.mid(11));
+        refreshSocial();
         return true;
     }
     return false;
@@ -428,10 +599,21 @@ void NetworkClient::handleSingleLineResult(const QString &line, PendingKind kind
 
     if (kind == PendingLogin) {
         finishPending();
-        if (ok) {
-            m_currentUser = m_loginUser;
-            emit loginSucceeded(m_currentUser);
-            QTimer::singleShot(0, this, [this]() { sendLine("HISTORY"); });
+        if (ok && line.startsWith("OK logged in ")) {
+            const QString identity = line.mid(13).trimmed();
+            const QStringList parts = identity.split('|');
+            m_currentAccount = parts.value(0);
+            m_currentNickname = parts.value(1, m_currentAccount);
+            emit loginSucceeded(displayName());
+            QTimer::singleShot(0, this, [this]() {
+                refreshSocial();
+                listPosts();
+            });
+        } else if (ok) {
+            m_currentAccount = m_loginName;
+            m_currentNickname = m_loginName;
+            emit loginSucceeded(displayName());
+            QTimer::singleShot(0, this, [this]() { refreshSocial(); });
         } else {
             emit loginFailed(message);
         }
@@ -446,13 +628,38 @@ void NetworkClient::handleSingleLineResult(const QString &line, PendingKind kind
         }
         return;
     }
+    if (kind == PendingPrivate) {
+        finishPending();
+        if (ok) {
+            emit statusMessage(message.isEmpty() ? "私聊已发送" : message);
+            refreshSocial();
+        } else {
+            emit statusMessage("私聊失败：" + message);
+        }
+        return;
+    }
+    if (kind == PendingGroupCreate) {
+        finishPending();
+        emit statusMessage(ok ? "群聊创建成功" : "群聊创建失败：" + message);
+        refreshSocial();
+        return;
+    }
+    if (kind == PendingGroupSend) {
+        finishPending();
+        if (ok) {
+            emit statusMessage("群消息已发送");
+        } else {
+            emit statusMessage("群消息发送失败：" + message);
+        }
+        return;
+    }
 
     if (kind == PendingBbsCreate && ok && !m_pendingCreateAttachment.isEmpty()) {
         const int id = parseTrailingId(message);
         const QString path = m_pendingCreateAttachment;
         m_pendingCreateAttachment.clear();
         finishPending();
-        emit bbsOperationFinished(QString("帖子已发布，正在上传附件..."), true);
+        emit bbsOperationFinished("帖子已发布，正在上传附件...", true);
         if (id > 0) {
             QTimer::singleShot(0, this, [this, id, path]() { uploadBbsPostAttachment(id, path); });
         } else {
@@ -465,7 +672,7 @@ void NetworkClient::handleSingleLineResult(const QString &line, PendingKind kind
         const QString path = m_pendingReplyAttachment;
         m_pendingReplyAttachment.clear();
         finishPending();
-        emit bbsOperationFinished(QString("回复已发布，正在上传附件..."), true);
+        emit bbsOperationFinished("回复已发布，正在上传附件...", true);
         if (id > 0) {
             QTimer::singleShot(0, this, [this, id, path]() { uploadBbsReplyAttachment(id, path); });
         } else {
@@ -587,18 +794,29 @@ void NetworkClient::startDownloadPayload(const QString &filename, qint64 size, c
     }
 }
 
+void NetworkClient::resetCollections()
+{
+    m_collectingFriends = false;
+    m_collectingRequests = false;
+    m_collectingSentRequests = false;
+    m_collectingGroups = false;
+    m_collectingNotifications = false;
+}
+
 QString NetworkClient::cleanLineText(QString text)
 {
     text.replace('\n', ' ');
     text.replace('\r', ' ');
+    text.replace('|', ' ');
     return text.trimmed();
 }
 
 QString NetworkClient::cleanBbsField(QString text)
 {
-    text = cleanLineText(text);
+    text.replace('\n', ' ');
+    text.replace('\r', ' ');
     text.replace('|', ' ');
-    return text;
+    return text.trimmed();
 }
 
 BbsPost NetworkClient::parsePostLine(const QString &line)
@@ -611,7 +829,8 @@ BbsPost NetworkClient::parsePostLine(const QString &line)
         post.title = parts.at(2);
         post.content = parts.at(3);
         post.attachment = parts.at(4);
-        post.time = parts.mid(5).join("|");
+        post.time = parts.at(5);
+        post.replies = parts.value(6);
     }
     return post;
 }
@@ -626,16 +845,42 @@ BbsReply NetworkClient::parseReplyLine(const QString &line)
         reply.author = parts.at(2);
         reply.content = parts.at(3);
         reply.attachment = parts.at(4);
-        reply.time = parts.mid(5).join("|");
-    } else if (parts.size() >= 5) {
-        reply.id = parts.at(0).toInt();
-        reply.postId = parts.at(1).toInt();
-        reply.author = parts.at(2);
-        reply.content = parts.at(3);
-        reply.attachment = "none";
-        reply.time = parts.mid(4).join("|");
+        reply.time = parts.at(5);
     }
     return reply;
+}
+
+SocialUser NetworkClient::parseSocialUser(const QString &line)
+{
+    const QStringList parts = line.split('|');
+    SocialUser user;
+    user.account = parts.value(0);
+    user.nickname = parts.value(1, user.account);
+    user.message = parts.mid(2).join("|");
+    return user;
+}
+
+GroupInfo NetworkClient::parseGroupLine(const QString &line)
+{
+    const QStringList parts = line.split('|');
+    GroupInfo group;
+    group.id = parts.value(0).toInt();
+    group.owner = parts.value(1);
+    group.name = parts.value(2);
+    return group;
+}
+
+NotificationInfo NetworkClient::parseNotificationLine(const QString &line)
+{
+    const QStringList parts = line.split('|');
+    NotificationInfo item;
+    item.id = parts.value(0);
+    item.type = parts.value(1);
+    item.target = parts.value(2);
+    item.message = parts.value(3);
+    item.createdAt = parts.value(4);
+    item.read = parts.value(5) == "1";
+    return item;
 }
 
 QString NetworkClient::fileBaseName(const QString &path)
@@ -667,10 +912,12 @@ QString NetworkClient::uniquePath(const QString &directory, const QString &filen
 int NetworkClient::parseTrailingId(const QString &message)
 {
     const QStringList parts = message.split(' ', QString::SkipEmptyParts);
-    if (parts.isEmpty()) {
-        return 0;
+    for (const QString &part : parts) {
+        bool ok = false;
+        const int id = part.toInt(&ok);
+        if (ok && id > 0) {
+            return id;
+        }
     }
-    bool ok = false;
-    const int id = parts.last().toInt(&ok);
-    return ok ? id : 0;
+    return 0;
 }
